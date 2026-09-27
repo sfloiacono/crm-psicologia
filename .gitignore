@@ -1,0 +1,11 @@
+# Nunca subir datos reales de pacientes
+*.xlsx
+*.xls
+*.csv
+consultorio-copia-*.json
+datos/
+backups/
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db

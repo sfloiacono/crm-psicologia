@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Consultorio</title>
+<meta name="description" content="Organizador de pacientes para consultorio de psicología">
+<meta name="theme-color" content="#F8F3F1">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Consultorio">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Nunito:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+
+</head>
+<body>
+<div class="app">
+  <nav class="nav" id="nav" aria-label="Secciones"></nav>
+  <main id="main"><div class="loading">Cargando tu consultorio…</div></main>
+</div>
+<dialog id="dlg"></dialog>
+<dialog id="confirm"></dialog>
+<div id="pop" class="pop" hidden role="dialog" aria-label="Sesión"></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<div id="offer" class="offer" hidden role="status"></div>
+<dialog id="viewer" class="viewer"></dialog>
+<input type="file" id="fileIn" accept="image/*,application/pdf" hidden>
+
+<script src="app.js"></script>
+</body>
+</html>
