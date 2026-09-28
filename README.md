@@ -1,4 +1,4 @@
-# Consultorio: organizador de pacientes
+# Consultorio Psiconflor
 
 Aplicación web para organizar un consultorio de psicología: agenda, registro de sesiones, cobros, comprobantes de pago y gastos.
 
@@ -14,22 +14,27 @@ Aplicación web para organizar un consultorio de psicología: agenda, registro d
 - **Gastos**: egresos del consultorio por categoría.
 - **Configuración**: todas las listas desplegables son editables, y se puede elegir la paleta de colores y la tipografía.
 
-## Dónde se guardan los datos (importante)
+## Dónde se guardan los datos
 
-En esta versión, los datos se guardan **en el navegador de cada dispositivo** (almacenamiento local):
+Los datos se guardan en **Firebase** (Google), en el proyecto `consultorio-psiconflor`, y se sincronizan al instante entre todos los dispositivos.
 
-- no se sincronizan entre la computadora y el celular;
-- si se borran los datos del navegador, se pierde lo cargado;
-- los comprobantes tienen un límite de 1,5 MB cada uno.
+- Se ingresa con una **cuenta de Google**. Solo pueden entrar las cuentas autorizadas.
+- Todas las cuentas autorizadas **comparten los mismos datos** del consultorio.
+- Si no hay conexión, la app sigue funcionando y guarda los cambios cuando vuelve internet.
+- Los comprobantes (imágenes o PDF) se guardan achicados en la misma base, con un máximo de 700 KB por archivo.
 
-Descargá una copia de seguridad seguido, desde **Configuración > Tus datos**.
+### Sumar o quitar una cuenta autorizada
 
-Esta versión sirve para probar la aplicación. Para uso real con pacientes está prevista la etapa 2 (ver más abajo).
+Hay que cambiarla en **dos lugares**, y las dos listas tienen que coincidir:
+
+1. **En Firebase:** Firestore Database > Reglas. Agregar o borrar el email en la lista y tocar **Publicar**.
+2. **En este repositorio:** en el archivo `firebase.js`, en la lista `AUTORIZADOS`. Después, subir el archivo a GitHub.
 
 ## Estructura
 
 ```
 index.html             Estructura de la página
+firebase.js            Conexión con Firebase y lista de cuentas autorizadas
 styles.css             Estilos, paletas y tipografías
 app.js                 Lógica de la aplicación
 manifest.webmanifest   Datos para instalarla en el celular
@@ -58,9 +63,7 @@ Cuando subas cambios, abrí `sw.js` y aumentá el número de `VERSION` (por ejem
 - Este repositorio contiene **solo el código**. Nunca subas datos reales de pacientes (planillas, copias de seguridad, comprobantes).
 - El archivo `.gitignore` bloquea por defecto las planillas de Excel, los CSV y las copias de seguridad de la app.
 
-## Próximos pasos (etapa 2)
+## Próximos pasos
 
-- Inicio de sesión con usuario y contraseña.
-- Base de datos en la nube (por ejemplo, Supabase o Firebase), para sincronizar los datos entre dispositivos.
-- Almacenamiento de comprobantes en la nube, sin el límite de tamaño.
+- PIN de 4 dígitos para abrir la app en el día a día.
 - Revisión de los requisitos de la Ley 25.326 de Protección de Datos Personales para datos de salud.

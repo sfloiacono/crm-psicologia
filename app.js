@@ -87,7 +87,7 @@ function mergeConfig(c){
 
 /* ============ Estado ============ */
 const S={config:null,patients:[],gastos:[],ses:{},view:'agenda',ag:'semana',cursor:TODAY,month:monthKey(TODAY),
-  q:'',filtroEstado:'',comps:[],awaitPay:new Set(),visible:{},edit:null,ready:false,downloads:null};
+  q:'',filtroEstado:'',comps:[],fileCache:{},awaitPay:new Set(),visible:{},edit:null,ready:false,downloads:null};
 const list=k=>S.config.lists[k]||[];
 const item=(k,id)=>list(k).find(i=>i.id===id);
 const pat=id=>S.patients.find(p=>p.id===id);
@@ -109,7 +109,13 @@ function options(k,sel,empty){
 const LKEY='consultorio-psico-v1';
 const Store={mode:'local',col:null,local:{},queue:{},writing:{},revs:{},
   async init(){
-    if(window.claude&&typeof window.claude.use==='function'){
+    if(document.querySelector('script[src="firebase.js"]')){
+      if(!await waitFB()){gate('error');return new Promise(()=>{})}
+      await authFB();
+      this.col=fbCol();this.mode='db';this.fb=true;
+      watchSync();
+    }
+    else if(window.claude&&typeof window.claude.use==='function'){
       try{
         const [db,user,dl,as]=await Promise.all([claude.use('db'),claude.use('user'),claude.use('downloads'),claude.use('assets')]);
         S.downloads=dl;S.assets=as;
@@ -132,7 +138,7 @@ const Store={mode:'local',col:null,local:{},queue:{},writing:{},revs:{},
             applyDoc(id,data);changed=true;
           }
           if(changed&&!S.dlgOpen&&!(document.activeElement?.dataset?.note)){render();if(S.popId)renderPop()}
-        },err=>{console.warn(err);if(first){first=false;this.mode='local';resolve(this.loadLocal())}});
+        },err=>{console.warn(err);if(this.fb){gate('error',err?.code);return}if(first){first=false;this.mode='local';resolve(this.loadLocal())}});
       });
     }
     return this.loadLocal();
@@ -149,17 +155,18 @@ const Store={mode:'local',col:null,local:{},queue:{},writing:{},revs:{},
     this.queue[id]=copy; if(!this.writing[id]) this.flush(id);
   },
   async flush(id){
-    this.writing[id]=true;
+    this.writing[id]=true;syncState();
     while(this.queue[id]){
       const d=this.queue[id];delete this.queue[id];
       try{await this.col.doc(id).set(d)}
       catch(e){
         if(e?.code==='unavailable'){await sleep(700+Math.random()*900);try{await this.col.doc(id).set(d)}catch(e2){toast('No se pudo guardar. Revisá la conexión e intentá de nuevo.')}}
-        else if(e?.code==='quota_exceeded') toast('Se alcanzó el límite de almacenamiento.');
+        else if(e?.code==='quota_exceeded'||e?.code==='resource-exhausted') toast('Se alcanzó el límite de almacenamiento.');
+        else if(e?.code==='permission-denied') toast('Tu cuenta no tiene permiso para guardar. Revisá la lista de emails autorizados.');
         else toast('No se pudo guardar el cambio.');
       }
     }
-    this.writing[id]=false;
+    this.writing[id]=false;syncState();
   },
   async remove(id){
     delete this.revs[id];
@@ -167,6 +174,67 @@ const Store={mode:'local',col:null,local:{},queue:{},writing:{},revs:{},
     try{await this.col.doc(id).delete()}catch(e){toast('No se pudo borrar.')}
   }
 };
+/* ---- Firebase: acceso y sincronización ---- */
+function waitFB(){
+  if(window.FB) return Promise.resolve(true);
+  return new Promise(res=>{const t=setTimeout(()=>res(false),15000);window.addEventListener('fb-ready',()=>{clearTimeout(t);res(true)},{once:true})});
+}
+function fbCol(){
+  return {
+    doc:id=>({set:d=>FB.fns.setDoc(FB.datoRef(id),d),delete:()=>FB.fns.deleteDoc(FB.datoRef(id))}),
+    onSnapshot:(next,err)=>FB.fns.onSnapshot(FB.datos(),snap=>next({docs:snap.docs,docChanges:()=>snap.docChanges()}),err)
+  };
+}
+function gate(state,info){
+  let g=document.getElementById('gate');
+  if(!g){g=document.createElement('div');g.id='gate';g.className='gate';document.body.appendChild(g)}
+  if(state===null){g.remove();return}
+  const logo='<img src="icons/icon-192.png" alt="" width="72" height="72">';
+  const body={
+    cargando:`<p class="muted">Conectando…</p>`,
+    login:`<p>Ingresá con tu cuenta de Google para ver la agenda y los datos del consultorio.</p>
+      <button class="btn primary big" data-a="login">Iniciar sesión con Google</button>
+      ${info?`<p class="gate-err">${esc(info)}</p>`:''}`,
+    denegado:`<p>La cuenta <b>${esc(info||'')}</b> no tiene acceso a este consultorio.</p>
+      <button class="btn primary big" data-a="logout">Entrar con otra cuenta</button>`,
+    error:`<p>No se pudo conectar con la base de datos${info==='permission-denied'?': tu cuenta no tiene permiso':''}. Revisá tu conexión a internet e intentá de nuevo.</p>
+      <button class="btn primary big" data-a="reload">Reintentar</button>`
+  }[state];
+  g.innerHTML=`<div class="gate-card">${logo}<h1>Consultorio Psiconflor</h1>${body}</div>`;
+}
+async function authFB(){
+  const {auth,fns,AUTORIZADOS}=FB;
+  gate('cargando');
+  let redirErr='';
+  try{await fns.getRedirectResult(auth)}catch(e){redirErr=loginMsg(e)}
+  const user=await new Promise(res=>{fns.onAuthStateChanged(auth,u=>{if(u)res(u);else gate('login',redirErr)})});
+  const email=String(user.email||'').toLowerCase();
+  if(!AUTORIZADOS.includes(email)){gate('denegado',email);await new Promise(()=>{})}
+  Store.email=email;gate('cargando');
+}
+function loginMsg(e){
+  const c=e?.code||'';
+  if(c==='auth/popup-closed-by-user'||c==='auth/cancelled-popup-request') return '';
+  if(c==='auth/unauthorized-domain') return 'Esta dirección no está autorizada en Firebase (Authentication > Configuración > Dominios autorizados).';
+  if(c==='auth/network-request-failed') return 'No hay conexión a internet.';
+  return 'No se pudo iniciar sesión. Intentá de nuevo.';
+}
+async function doLogin(){
+  const {auth,fns,provider}=FB;
+  try{await fns.signInWithPopup(auth,provider)}
+  catch(e){
+    if(['auth/popup-blocked','auth/operation-not-supported-in-this-environment','auth/web-storage-unsupported'].includes(e?.code)){await fns.signInWithRedirect(auth,provider);return}
+    const m=loginMsg(e);if(m)gate('login',m);
+  }
+}
+async function doLogout(){try{await FB.fns.signOut(FB.auth)}catch(e){}location.reload()}
+function syncState(){
+  const el=document.getElementById('sync');if(!el||!Store.fb)return;
+  const busy=Object.values(Store.writing).some(Boolean);
+  el.className='sync '+(!navigator.onLine?'off':busy?'busy':'ok');
+  el.textContent=!navigator.onLine?'Sin conexión: los cambios se guardan al volver':busy?'Guardando…':'Todo sincronizado';
+}
+function watchSync(){window.addEventListener('online',syncState);window.addEventListener('offline',syncState)}
 function applyDoc(id,data){
   data=data?JSON.parse(JSON.stringify(data)):null; // los datos de la cuenta llegan de solo lectura: se trabaja sobre una copia
   if(id==='config') S.config=mergeConfig(data||defaultConfig());
@@ -182,7 +250,7 @@ const saveGastos=()=>Store.save('gastos',{items:S.gastos});
 const ACCEPT=['image/jpeg','image/png','image/webp','image/gif','application/pdf'];
 const compsOf=pid=>S.comps.filter(c=>c.pid===pid).sort((a,b)=>((b.fecha||'')+(b.subido||'')).localeCompare((a.fecha||'')+(a.subido||'')));
 const compsOfSes=sid=>S.comps.filter(c=>c.sid===sid);
-const compUrl=c=>c.asset?('/_blob/'+c.asset):(c.data||'');
+const compUrl=c=>c.asset?('/_blob/'+c.asset):c.fileDoc?(S.fileCache[c.id]||''):(c.data||'');
 const saveComps=()=>Store.save('comprobantes',{items:S.comps});
 const fmtSize=b=>b>1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB';
 function compChip(c){
@@ -210,14 +278,14 @@ function pickFile(pid,sid){
   S.attachFor={pid,sid:sid||null};closeOffer();
   const inp=document.getElementById('fileIn');inp.value='';inp.click();
 }
-async function toJpeg(file){
+async function toJpeg(file,max=2000,q=.85){
   try{
     const url=URL.createObjectURL(file);
     const img=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=url});
-    const max=2000;const k=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
+    const k=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
     const c=document.createElement('canvas');c.width=Math.round(img.naturalWidth*k);c.height=Math.round(img.naturalHeight*k);
     c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);
-    return await new Promise(r=>c.toBlob(b=>r(b),'image/jpeg',.85));
+    return await new Promise(r=>c.toBlob(b=>r(b),'image/jpeg',q));
   }catch(e){return null}
 }
 const blobToDataUrl=b=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(b)});
@@ -232,7 +300,14 @@ async function handleFile(file){
   const base=(file.name||'comprobante').replace(/\.[^.]+$/,'');
   const rec={id:'c_'+uid(),pid:tgt.pid,sid:tgt.sid,fecha:s?.fecha||TODAY,subido:new Date().toISOString(),nombre:base+(type==='application/pdf'?'.pdf':'.jpg'),tipo:type,size:blob.size};
   toast('Subiendo comprobante…');
-  if(S.assets){
+  if(Store.fb){
+    const LIM=700*1024;
+    if(isImg&&blob.size>LIM){const j=await toJpeg(file,1400,.65);if(j){blob=j;type='image/jpeg'}}
+    if(blob.size>LIM){toast(isPdf?'El PDF es muy pesado (máximo 700 KB). Probá adjuntar una captura de pantalla.':'La imagen es muy pesada. Probá con una captura de pantalla.');return}
+    const data=await blobToDataUrl(blob);
+    rec.size=blob.size;rec.fileDoc=true;S.fileCache[rec.id]=data;
+    FB.fns.setDoc(FB.archivoRef(rec.id),{data,pid:rec.pid,tipo:type}).catch(()=>toast('No se pudo guardar el archivo en la nube.'));
+  } else if(S.assets){
     try{const r=await S.assets.upload(blob,{type});rec.asset=r.id;rec.size=r.sizeBytes}
     catch(e){
       const m={too_large:'El archivo es demasiado grande (máximo 20 MB).',unsupported_type:'Ese tipo de archivo no se puede adjuntar. Usá una imagen o un PDF.',quota_or_state:'Se llenó el espacio para archivos.',rate_limited:'Demasiadas subidas seguidas. Esperá un momento.',not_granted:'No tenés permiso para adjuntar archivos en esta app.'};
@@ -249,12 +324,18 @@ async function handleFile(file){
   else if(dlg.open&&S.edit?.id===tgt.sid){sesSheet()}
   else if(S.popId) renderPop();
 }
-function viewComp(id){
-  const c=S.comps.find(x=>x.id===id);if(!c)return;const p=pat(c.pid);const url=compUrl(c);
+async function viewComp(id){
+  const c=S.comps.find(x=>x.id===id);if(!c)return;const p=pat(c.pid);
+  if(c.fileDoc&&!S.fileCache[c.id]){
+    toast('Abriendo comprobante…');
+    try{const snap=await FB.fns.getDoc(FB.archivoRef(c.id));S.fileCache[c.id]=snap.exists()?snap.data().data:''}catch(e){toast('No se pudo abrir el comprobante. Revisá la conexión.');return}
+    if(!S.fileCache[c.id]){toast('No se encontró el archivo de este comprobante.');return}
+  }
+  const url=compUrl(c);
   const v=document.getElementById('viewer');
   v.innerHTML=`<div class="dlg-head"><div><h2>${esc(c.nombre)}</h2><p class="muted small">${esc(fullName(p))}, sesión del ${fmtShort(c.fecha)}. Subido el ${fmtShort(c.subido.slice(0,10))}, ${fmtSize(c.size||0)}</p></div><button class="btn ghost icon" data-a="viewer-close" aria-label="Cerrar">✕</button></div>
     <div class="viewer-body">${c.tipo==='application/pdf'?`<iframe src="${esc(url)}" title="${esc(c.nombre)}"></iframe>`:`<img src="${esc(url)}" alt="Comprobante de ${esc(fullName(p))}">`}</div>
-    <div class="dlg-foot"><button class="btn danger" data-a="comp-del" data-id="${esc(c.id)}">Eliminar comprobante</button><a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Abrir en otra pestaña</a></div>`;
+    <div class="dlg-foot"><button class="btn danger" data-a="comp-del" data-id="${esc(c.id)}">Eliminar comprobante</button>${url.startsWith('data:')?`<a class="btn" href="${esc(url)}" download="${esc(c.nombre)}">Descargar</a>`:`<a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Abrir en otra pestaña</a>`}</div>`;
   if(!v.open)v.showModal();
 }
 async function deleteComp(id){
@@ -262,6 +343,7 @@ async function deleteComp(id){
   const ok=await confirmBox('Eliminar comprobante',`Se elimina "${c.nombre}" del historial de ${fullName(pat(c.pid))}. No se puede deshacer.`,'Eliminar');
   if(!ok)return;
   if(c.asset&&S.assets){try{await S.assets.delete(c.asset)}catch(e){}}
+  if(c.fileDoc&&Store.fb){FB.fns.deleteDoc(FB.archivoRef(c.id)).catch(()=>{});delete S.fileCache[c.id]}
   S.comps=S.comps.filter(x=>x.id!==id);saveComps();
   const v=document.getElementById('viewer');if(v.open)v.close();
   if(dlg.open&&document.getElementById('pac-form')){readPacForm();renderPacDialog()} else if(S.popId) renderPop();
@@ -402,9 +484,10 @@ const VIEWS=[['agenda','Agenda'],['semanas','Semanas'],['caja','Caja mensual'],[
 function renderNav(){
   const prof=S.config?.general?.profesional;const n=unmarkedList().length+debtList().length;
   document.getElementById('nav').innerHTML=`
-    <div class="brand"><strong>Consultorio</strong><span>${esc(prof||'Organizador de pacientes')}</span></div>
+    <div class="brand"><strong>Consultorio Psiconflor</strong><span>${esc(prof||'Organizador de pacientes')}</span></div>
     ${VIEWS.map(([v,l])=>`<button data-a="nav" data-v="${v}" ${S.view===v?'aria-current="page"':''}>${ICONS[v]}<span>${l}</span>${v==='agenda'&&n?`<em class="badge" aria-label="${n} pendientes">${n}</em>`:''}</button>`).join('')}
-    <div class="foot">${Store.mode==='db'?'Datos guardados en tu cuenta, visibles solo para vos.':'Datos guardados solo en este navegador.'}</div>`;
+    <div class="foot">${Store.fb?`<span id="sync" class="sync ok">Todo sincronizado</span><span class="who">${esc(Store.email||'')}</span>`:Store.mode==='db'?'Datos guardados en tu cuenta, visibles solo para vos.':'Datos guardados solo en este navegador.'}</div>`;
+  syncState();
 }
 function applyLook(){
   const g=S.config?.general||{};const r=document.documentElement;
@@ -919,10 +1002,11 @@ function viewConfig(){
       <div class="field"><label>Fin de semana</label><label class="check"><input type="checkbox" data-c="gen" data-k="finDeSemana" ${g.finDeSemana?'checked':''}>Mostrar sábado y domingo siempre</label></div>
     </div></div></section>
     <div class="cfg-grid" style="margin-top:16px">${panels}</div>
-    <section class="panel" style="margin-top:16px"><div class="panel-head"><div><h2>Tus datos</h2><p class="small muted" style="margin-top:3px">${Store.mode==='db'?'Se guardan en tu cuenta y solo vos podés verlos.':'Se guardan solo en este navegador. Descargá copias de seguridad seguido.'}</p></div></div>
+    <section class="panel" style="margin-top:16px"><div class="panel-head"><div><h2>Tus datos</h2><p class="small muted" style="margin-top:3px">${Store.fb?`Se guardan en la nube y se sincronizan entre las cuentas autorizadas. Sesión iniciada como ${esc(Store.email||'')}.`:Store.mode==='db'?'Se guardan en tu cuenta y solo vos podés verlos.':'Se guardan solo en este navegador. Descargá copias de seguridad seguido.'}</p></div></div>
     <div class="panel-body btn-group">
       <button class="btn" data-a="export">Descargar copia de seguridad</button>
       <label class="btn">Restaurar desde una copia<input type="file" accept=".json,application/json" data-c="import" hidden></label>
+      ${Store.fb?'<button class="btn" data-a="logout">Cerrar sesión</button>':''}
       <button class="btn danger" data-a="reset">Borrar todos los datos</button>
     </div></section>`;
 }
@@ -1115,6 +1199,9 @@ document.addEventListener('click',async ev=>{
     case 'reg-pago':{const s=S.visible[a.dataset.id]||findSession(a.dataset.id);if(!s)break;saveSession({...s,pago:a.dataset.v});S.awaitPay.delete(s.id);render();
       toast(item('estadosPago',a.dataset.v)?.tipo==='cobrado'?'Registrada: realizada y pagada':'Registrada. Quedó en "Pendientes de pago".');break}
     case 'reg-undo':{const s=S.visible[a.dataset.id]||findSession(a.dataset.id);if(!s)break;S.awaitPay.delete(s.id);saveSession({...s,estado:'programada'});render();break}
+    case 'login': doLogin();break;
+    case 'logout': doLogout();break;
+    case 'reload': location.reload();break;
     case 'look':{S.config.general[a.dataset.k]=a.dataset.v;saveConfig();render();break}
     case 'set-cobrar':{const s=(S.edit&&S.edit.id===a.dataset.id&&dlg.open)?S.edit:(S.visible[a.dataset.id]||findSession(a.dataset.id));if(!s)break;
       const pendId=list('estadosPago').find(x=>x.tipo==='pendiente')?.id||'pendiente';const saved=saveSession({...s,cobrar:a.dataset.v==='1',...(a.dataset.v==='1'?{}:{pago:pendId})});
@@ -1207,7 +1294,7 @@ document.addEventListener('click',async ev=>{
       else{const url=URL.createObjectURL(new Blob([data],{type:'application/json'}));const l=document.createElement('a');l.href=url;l.download=filename;document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(url),2000)}
       break}
     case 'reset':{
-      const ok=await confirmBox('Borrar todos los datos','Se eliminan pacientes, sesiones, gastos y configuración. Esta acción no se puede deshacer. Descargá una copia antes si la necesitás.','Borrar todo');
+      const ok=await confirmBox('Borrar todos los datos',`Se eliminan pacientes, sesiones, gastos y configuración${Store.fb?' para todas las cuentas autorizadas':''}. Esta acción no se puede deshacer. Descargá una copia antes si la necesitás.`,'Borrar todo');
       if(!ok) break;
       const ids=['config','patients','gastos',...Object.keys(S.ses)];
       S.ses={};S.patients=[];S.gastos=[];S.config=defaultConfig();
@@ -1294,9 +1381,23 @@ document.addEventListener('pointerup',async ()=>{
 
 /* ============ Inicio ============ */
 (async function start(){
+  {const r=document.documentElement;r.dataset.palette=r.dataset.palette||'rosa-salvia';r.dataset.font=r.dataset.font||'serena';r.dataset.textura='papel';}
   const docs=await Store.init();
-  if(!docs.config){ seedExample(); }
+  if(!docs.config){
+    if(Store.fb){
+      gate(null);
+      const loc=Store.loadLocal();
+      if(loc.config&&await confirmBox('Datos en este dispositivo','Encontramos datos cargados en este navegador de una versión anterior. ¿Querés subirlos a la nube para tenerlos en todos tus dispositivos?','Subir a la nube',false)){
+        for(const [id,d] of Object.entries(loc)){
+          if(id==='comprobantes'){for(const c of (d.items||[])){if(c.data){FB.fns.setDoc(FB.archivoRef(c.id),{data:c.data,pid:c.pid,tipo:c.tipo}).catch(()=>{});S.fileCache[c.id]=c.data;delete c.data;c.fileDoc=true}}}
+          applyDoc(id,d);Store.save(id,d);
+        }
+        toast('Datos subidos a la nube');
+      } else { S.config=defaultConfig();saveConfig(); }
+    } else seedExample();
+  }
   else { for(const [id,d] of Object.entries(docs)) applyDoc(id,d); }
+  gate(null);
   S.ag=S.config.general.vistaInicial||(window.innerWidth<760?'dia':'semana');
   if(window.innerWidth<760&&S.ag==='semana') S.ag='dia';
   S.ready=true;render();

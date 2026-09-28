@@ -1,6 +1,6 @@
 {
-  "name": "Consultorio: organizador de pacientes",
-  "short_name": "Consultorio",
+  "name": "Consultorio Psiconflor",
+  "short_name": "Psiconflor",
   "description": "Agenda, registro de sesiones, cobros y gastos para un consultorio de psicología.",
   "lang": "es-AR",
   "start_url": "./",
