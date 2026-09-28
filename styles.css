@@ -460,3 +460,28 @@ html[data-textura="papel"] .gate{background-image:inherit}
 .sync.busy::before{background:var(--warn)}
 .sync.off::before{background:var(--danger)}
 .who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.caja-note{margin:-6px 0 16px}
+.kpi.neto b{color:#2E7D4F}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .kpi.neto b{color:#8FD0A5}}
+.kpi.neto.neg b{color:var(--danger)}
+.ok-txt{color:#2E7D4F;font-weight:600}
+.warn-txt{color:var(--warn)}
+.netcell{position:relative;min-width:150px}
+.netcell b{position:relative}
+.nbar{position:absolute;right:10px;top:50%;transform:translateY(-50%);height:22px;border-radius:5px;background:color-mix(in srgb,var(--accent) 16%,transparent);max-width:calc(100% - 20px)}
+.nbar.neg{background:color-mix(in srgb,var(--danger) 16%,transparent)}
+
+.neg-txt{color:var(--danger);font-weight:600;white-space:nowrap}
+.kpi.minus b{color:var(--danger)}
+
+dialog.alerta{width:min(680px,calc(100vw - 24px))}
+.alert-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.alert-list li{border:1px solid var(--line);border-left:4px solid var(--danger);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.al-main{display:flex;flex-direction:column;gap:2px}
+.al-days{font-size:.8rem;font-weight:700;color:var(--danger)}
+.al-act{display:flex;gap:6px;flex-wrap:wrap}
+.late{font-size:.72rem;font-weight:700;color:var(--danger);background:var(--danger-soft);border-radius:5px;padding:1px 6px;white-space:nowrap;margin-left:auto}
+.late+.small{margin-left:8px!important}
+
+a.btn{text-decoration:none;color:inherit}

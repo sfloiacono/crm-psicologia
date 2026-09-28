@@ -9,9 +9,10 @@ Aplicación web para organizar un consultorio de psicología: agenda, registro d
 - **Registro en dos niveles**: primero el estado de la sesión (Realizada, Canceló paciente, Feriado, etc.) y, por separado, el pago.
 - **Cancelaciones que se cobran**: los estados configurados como "A elegir" permiten decidir en cada sesión si se cobra.
 - **Semanas**: análisis semanal con gráfico, tabla y detalle editable.
-- **Caja mensual**: cobrado, pendiente, porcentaje para instituciones, gastos y neto del mes.
+- **Caja**: cobrado, pendiente, porcentaje para instituciones, gastos y neto, por día, por semana o por mes.
 - **Pacientes**: ficha completa, historial de horarios y comprobantes de pago (imagen o PDF).
 - **Gastos**: egresos del consultorio por categoría.
+- **Aviso de pagos atrasados**: una ventana emergente avisa cuando un pago lleva más de 7 días pendiente (el plazo se cambia en Configuración), con acceso a marcarlo como pagado o a recordarle al paciente por WhatsApp.
 - **Configuración**: todas las listas desplegables son editables, y se puede elegir la paleta de colores y la tipografía.
 
 ## Dónde se guardan los datos

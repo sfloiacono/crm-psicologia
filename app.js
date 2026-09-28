@@ -505,6 +505,47 @@ function purgePatient(pid){
   if(cs.length){S.comps=S.comps.filter(c=>c.pid!==pid);saveComps()}
 }
 
+/* ============ Aviso de pagos atrasados ============ */
+const LK_ALERTA='psiconflor-alerta-vista';
+const alertaDias=()=>Math.max(1,Number(S.config?.general?.alertaDias||7));
+const pendDesde=s=>String(s.registradoEl||s.fecha).slice(0,10);
+const diasPend=s=>daysBetween(pendDesde(s),TODAY);
+function overdueList(){
+  const n=alertaDias();
+  return debtList().filter(s=>diasPend(s)>=n&&!(s.alertaHasta&&s.alertaHasta>TODAY)).sort((a,b)=>diasPend(b)-diasPend(a));
+}
+function waLink(s){
+  const p=pat(s.pid);let t=String(p?.telefono||'').replace(/\D/g,'');if(!t)return '';
+  t=t.replace(/^0+/,'');if(!t.startsWith('54'))t='549'+t.replace(/^15/,'');
+  const msg=`Hola ${p.nombre||''}, ¿cómo estás? Te escribo para recordarte que está pendiente el pago de la sesión del ${fmtShort(s.fecha)} (${money(montoOf(s))}). ¡Muchas gracias!`;
+  return `https://wa.me/${t}?text=${encodeURIComponent(msg)}`;
+}
+function checkOverdue(force){
+  const list=overdueList();const d=document.getElementById('alerta');
+  if(!list.length){if(d.open)d.close();return}
+  let seen={};try{seen=JSON.parse(localStorage.getItem(LK_ALERTA)||'{}')}catch(e){}
+  const vistos=seen.fecha===TODAY?(seen.ids||[]):[];
+  if(!force&&list.every(s=>vistos.includes(s.id))) return;
+  if(!force&&(dlg.open||document.getElementById('confirm').open)) return;
+  renderAlerta(list);
+  try{localStorage.setItem(LK_ALERTA,JSON.stringify({fecha:TODAY,ids:[...new Set([...vistos,...list.map(s=>s.id)])]}))}catch(e){}
+}
+function renderAlerta(list){
+  const d=document.getElementById('alerta');list=list||overdueList();
+  if(!list.length){if(d.open)d.close();toast('No quedan pagos atrasados');return}
+  const tot=list.reduce((a,s)=>a+montoOf(s),0);
+  d.innerHTML=`<div class="dlg-head"><div><h2>Pagos pendientes hace más de ${alertaDias()} días</h2><p class="muted small">${list.length} ${list.length===1?'sesión':'sesiones'}, ${money(tot)} en total.</p></div><button class="btn ghost icon" data-a="alerta-close" aria-label="Cerrar">✕</button></div>
+    <div class="dlg-body"><ul class="alert-list">${list.map(s=>{S.visible[s.id]=s;const p=pat(s.pid);const e=item('estadosSesion',s.estado);const wa=waLink(s);
+      return `<li><div class="al-main"><b>${esc(fullName(p))}</b><span class="small muted">Sesión del ${DIAS_C[dow(s.fecha)-1]} ${fmtShort(s.fecha)}${s.estado!==realizadaId()?` (${esc(e?.nombre||'')})`:''}, ${money(montoOf(s))}</span>
+        <span class="al-days">Pendiente hace ${diasPend(s)} días</span></div>
+        <div class="al-act"><button class="btn primary sm" data-a="al-pay" data-id="${esc(s.id)}">Pagado</button>
+        ${wa?`<a class="btn sm" href="${esc(wa)}" target="_blank" rel="noopener">Recordar por WhatsApp</a>`:''}
+        <button class="btn ghost sm" data-a="al-snooze" data-id="${esc(s.id)}">Avisarme en 3 días</button>
+        <button class="btn ghost sm" data-a="al-goto" data-id="${esc(s.id)}">Ver en la agenda</button></div></li>`}).join('')}</ul></div>
+    <div class="dlg-foot"><span class="small muted">Podés cambiar la cantidad de días en Configuración.</span><button class="btn" data-a="alerta-close">Cerrar</button></div>`;
+  if(!d.open)d.showModal();
+}
+
 function sessionsInRange(from,to){
   const out=new Map();
   for(const m of monthsBetween(from,to)){
@@ -536,6 +577,9 @@ function saveSession(s){
   if(c.porc==null) c.porc=Number(instOf(p)?.porcentaje||0);
   if(!c.medio) c.medio=p?.medioPago||'';
   if(!c.dur) c.dur=defDur();
+  {const old=findSession(c.id);
+   if(cobraOf(c)){if(!c.registradoEl||!old||!cobraOf(old))c.registradoEl=(old&&cobraOf(old)&&old.registradoEl)||TODAY}
+   else delete c.registradoEl;}
   const k='ses-'+monthKey(c.fecha);
   const doc=S.ses[k]||(S.ses[k]={items:{}});doc.items=doc.items||{};doc.items[c.id]=c;
   Store.save(k,doc);
@@ -583,7 +627,7 @@ const ICONS={
   config:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg>',
   info:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>'
 };
-const VIEWS=[['agenda','Agenda'],['semanas','Semanas'],['caja','Caja mensual'],['pacientes','Pacientes'],['gastos','Gastos'],['config','Configuración']];
+const VIEWS=[['agenda','Agenda'],['semanas','Semanas'],['caja','Caja'],['pacientes','Pacientes'],['gastos','Gastos'],['config','Configuración']];
 function renderNav(){
   const prof=S.config?.general?.profesional;const n=unmarkedList().length+debtList().length;
   document.getElementById('nav').innerHTML=`
@@ -645,6 +689,7 @@ function viewAgenda(){
     <div class="btn-group"><div class="seg" role="group" aria-label="Vista">${seg}</div>
     <button class="btn icon" data-a="ag-nav" data-n="-1" aria-label="Anterior">‹</button><button class="btn" data-a="ag-nav" data-n="0">Hoy</button><button class="btn icon" data-a="ag-nav" data-n="1" aria-label="Siguiente">›</button>
     <button class="btn${panelOpen?' on':''}" data-a="panel-toggle" aria-expanded="${panelOpen}">Pendientes${pendCount?` <em class="count">${pendCount}</em>`:''}</button></div></div>
+    ${(()=>{const o=overdueList();return o.length?`<div class="notice warn">${ICONS.info}<p style="flex:1">${o.length===1?'Hay 1 pago pendiente':`Hay ${o.length} pagos pendientes`} hace más de ${alertaDias()} días.</p><button class="btn sm" data-a="alerta-open">Ver</button></div>`:''})()}
     ${downloadNotice()}
     ${S.patients.length?'':`<div class="notice">${ICONS.info}<p>Todavía no cargaste pacientes. Creá uno en Pacientes con su horario y la agenda se completa sola.</p></div>`}
     <div class="ag-layout${panelOpen?' with-panel':''}">
@@ -694,7 +739,7 @@ function sidePanel(um,debts){
   const debtRows=Object.entries(byP).sort((a,b)=>sortName(pat(a[0])).localeCompare(sortName(pat(b[0])))).map(([pid,ss])=>{
     const p=pat(pid);const tot=ss.reduce((a,s)=>a+montoOf(s),0);
     return `<div class="side-row"><div class="side-top"><b>${esc(fullName(p)||'Paciente eliminado')}</b><span class="side-amt">${money(tot)}</span></div>
-      <div class="debt-lines">${ss.map(s=>{S.visible[s.id]=s;return `<div class="debt-line" data-id="${esc(s.id)}"><button class="side-date" data-a="goto-ses" data-id="${esc(s.id)}" title="Ver en el calendario">${DIAS_C[dow(s.fecha)-1]} ${fmtShort(s.fecha)}, ${esc(s.hora||'')}</button><span class="small">${money(montoOf(s))}</span><button class="btn sm" data-a="ses-pay" data-id="${esc(s.id)}">Pagado</button></div>`}).join('')}</div>
+      <div class="debt-lines">${ss.map(s=>{S.visible[s.id]=s;return `<div class="debt-line" data-id="${esc(s.id)}"><button class="side-date" data-a="goto-ses" data-id="${esc(s.id)}" title="Ver en el calendario">${DIAS_C[dow(s.fecha)-1]} ${fmtShort(s.fecha)}, ${esc(s.hora||'')}</button>${diasPend(s)>=alertaDias()?`<span class="late" title="Pendiente desde el ${fmtShort(pendDesde(s))}">${diasPend(s)} días</span>`:''}<span class="small">${money(montoOf(s))}</span><button class="btn sm" data-a="ses-pay" data-id="${esc(s.id)}">Pagado</button></div>`}).join('')}</div>
       ${ss.length>1?`<button class="btn sm" data-a="pay-all" data-pid="${esc(pid)}">Marcar las ${ss.length} como pagadas</button>`:''}</div>`}).join('');
   return `<section class="side-sec"><div class="side-head"><h2>Para registrar</h2><span class="muted small">${rows.length||''}</span></div>
       <p class="side-desc">Sesiones que ya pasaron y todavía no tienen estado. Al elegirlo, la sesión sale de esta lista.</p>
@@ -915,8 +960,7 @@ function viewSemanas(){
       <td class="num">${st.total}</td><td class="num">${st.realizadas}</td>
       <td>${mot||'<span class="muted">—</span>'}</td>
       <td class="num">${st.pct==null?'—':st.pct+'%'}</td>
-      <td class="num">${st.sinRegistrar?`<span style="color:var(--warn)">${st.sinRegistrar}</span>`:'—'}</td>
-      <td class="num">${money(st.cobrado)}</td><td class="num">${st.pendiente?`<span style="color:var(--warn)">${money(st.pendiente)}</span>`:'—'}</td></tr>`}).join('');
+      <td class="num">${st.sinRegistrar?`<span style="color:var(--warn)">${st.sinRegistrar}</span>`:'—'}</td></tr>`}).join('');
   const sel=rows.find(r=>r.from===S.wkSel);const st=sel.st;
   const showWE=S.config.general.finDeSemana||sel.ss.some(s=>dow(s.fecha)>=6);
   let days='';
@@ -929,11 +973,11 @@ function viewSemanas(){
   return `<div class="view-head"><div><h1>Semanas de ${MESES[Number(mm)-1]} ${y}</h1><p class="sub">Cada semana va de lunes a domingo, con sus fechas. Tocá una semana para ver su detalle.</p></div>
     <div class="btn-group"><button class="btn icon" data-a="wk-month" data-n="-1" aria-label="Mes anterior">‹</button><button class="btn" data-a="wk-month" data-n="0">Este mes</button><button class="btn icon" data-a="wk-month" data-n="1" aria-label="Mes siguiente">›</button></div></div>
     <div class="panel"><div class="panel-head"><h2>Sesiones por semana</h2></div><div class="panel-body chart wkchart">${wkChart(rows)}</div>
-    <div class="scroll"><table class="wk-table"><thead><tr><th>Semana</th><th class="num">Sesiones</th><th class="num">Realizadas</th><th>No realizadas</th><th class="num">% realizadas</th><th class="num">Sin registrar</th><th class="num">Cobrado</th><th class="num">Pendiente</th></tr></thead>
+    <div class="scroll"><table class="wk-table"><thead><tr><th>Semana</th><th class="num">Sesiones</th><th class="num">Realizadas</th><th>No realizadas</th><th class="num">% realizadas</th><th class="num">Sin registrar</th></tr></thead>
     <tbody>${tbl}</tbody></table></div>
     <p class="hint panel-body" style="padding-top:8px">"% realizadas" se calcula sobre las sesiones ya registradas. Las semanas que se reparten entre dos meses muestran sus siete días completos.</p></div>
-    <div class="wk-detail-head"><div><h2>Semana del ${wkLabel(sel.from)}</h2><p class="sub">${st.total} sesiones, ${st.realizadas} realizadas${st.sinRegistrar?`, ${st.sinRegistrar} sin registrar`:''}. ${money(st.cobrado)} cobrado${st.pendiente?`, ${money(st.pendiente)} pendiente`:''}${st.inst?`, ${money(st.inst)} para instituciones`:''}.</p></div>
-      <div class="btn-group"><button class="btn icon" data-a="wk-step" data-n="-1" aria-label="Semana anterior">‹</button><button class="btn icon" data-a="wk-step" data-n="1" aria-label="Semana siguiente">›</button></div></div>
+    <div class="wk-detail-head"><div><h2>Semana del ${wkLabel(sel.from)}</h2><p class="sub">${st.total} sesiones, ${st.realizadas} realizadas${st.sinRegistrar?`, ${st.sinRegistrar} sin registrar`:''}.</p></div>
+      <div class="btn-group"><button class="btn sm" data-a="caja-go" data-v="semana" data-d="${sel.from}">Ver cobros y neto en Caja</button><button class="btn icon" data-a="wk-step" data-n="-1" aria-label="Semana anterior">‹</button><button class="btn icon" data-a="wk-step" data-n="1" aria-label="Semana siguiente">›</button></div></div>
     <div class="wweek" style="--cols:${showWE?7:5}">${days}</div>`;
 }
 
@@ -950,10 +994,80 @@ function pillFor(s){
   if(cobraOf(s)&&pg?.tipo==='pendiente') return `<button class="pill debe" data-a="open-ses" data-id="${esc(s.id)}" title="${esc(t)}">${fmtShort(s.fecha)} debe ${money(montoOf(s))}</button>`;
   return `<button class="pill ${s.estado==='programada'?'soft':''}" style="--c:${c}" data-a="open-ses" data-id="${esc(s.id)}" title="${esc(t)}"><span class="dot"></span>${fmtShort(s.fecha)} ${esc(e?.nombre||'')}</button>`;
 }
+const neg=n=>n?`<span class="neg-txt">−${money(n)}</span>`:'—';
+function cajaRange(){
+  const c=S.cajaCur||TODAY;
+  if(S.cajaV==='dia') return [c,c];
+  if(S.cajaV==='semana'){const f=mondayOf(c);return [f,addDays(f,6)]}
+  const m=monthKey(c);return [m+'-01',lastOfMonth(m)];
+}
+function periodMoney(from,to,ss){
+  const all=ss||sessionsInRange(from,to);const st=stats(all);
+  const gastos=S.gastos.filter(g=>(g.fecha||'')>=from&&(g.fecha||'')<=to).reduce((a,g)=>a+Number(g.monto||0),0);
+  const fut=all.filter(s=>s.estado==='programada'&&!isPast(s));
+  return {all,st,gastos,neto:st.cobrado-st.inst-gastos,prevN:fut.length,prev:fut.reduce((a,s)=>a+montoOf(s),0)};
+}
+function cajaTitle(from,to){
+  if(S.cajaV==='dia') return cap(fmtLong(from));
+  if(S.cajaV==='mes') return `${cap(MESES[parse(from).getMonth()])} ${parse(from).getFullYear()}`;
+  const a=parse(from),b=parse(to);
+  return a.getMonth()===b.getMonth()?`Del ${a.getDate()} al ${b.getDate()} de ${MESES[b.getMonth()]}`:`Del ${a.getDate()} de ${MESES[a.getMonth()]} al ${b.getDate()} de ${MESES[b.getMonth()]}`;
+}
 function viewCaja(){
-  const m=S.month,first=m+'-01',last=lastOfMonth(m);
-  const all=sessionsInRange(first,last);const st=stats(all);
-  const gastos=gastosMes(m).reduce((a,g)=>a+Number(g.monto||0),0);
+  S.cajaV=S.cajaV||'mes';S.cajaCur=S.cajaCur||TODAY;
+  const [from,to]=cajaRange();const P=periodMoney(from,to);const st=P.st;
+  const lbl={dia:'del día',semana:'de la semana',mes:'del mes'}[S.cajaV];
+  const seg=[['dia','Día'],['semana','Semana'],['mes','Mes']].map(([v,l])=>`<button data-a="caja-view" data-v="${v}" aria-pressed="${S.cajaV===v}">${l}</button>`).join('');
+  let body='';
+  if(S.cajaV==='dia') body=cajaDia(from,P);
+  else if(S.cajaV==='semana') body=cajaSemana(from);
+  else {const m=monthKey(from);body=cajaMesPacientes(P)+weekdayPanel(m,P.all)+yearChart(m.slice(0,4))}
+  return `<div class="view-head"><div><h1>Caja</h1><p class="sub">${cajaTitle(from,to)}${S.cajaV==='semana'?`, ${parse(from).getFullYear()}`:''}. Cada sesión cuenta en la fecha en que se atendió.</p></div>
+    <div class="btn-group"><div class="seg" role="group" aria-label="Período">${seg}</div>
+    <button class="btn icon" data-a="caja-nav" data-n="-1" aria-label="Anterior">‹</button><button class="btn" data-a="caja-nav" data-n="0">Hoy</button><button class="btn icon" data-a="caja-nav" data-n="1" aria-label="Siguiente">›</button></div></div>
+    <div class="kpis">
+      <div class="kpi"><span>Cobrado</span><b>${money(st.cobrado)}</b></div>
+      <div class="kpi ${st.pendiente?'warn':''}"><span>Pendiente de cobro</span><b>${money(st.pendiente)}</b></div>
+      <div class="kpi ${st.inst?'minus':''}"><span>Para instituciones</span><b>${st.inst?'−'+money(st.inst):money(0)}</b></div>
+      <div class="kpi ${P.gastos?'minus':''}"><span>Gastos</span><b>${P.gastos?'−'+money(P.gastos):money(0)}</b></div>
+      <div class="kpi neto ${P.neto<0?'neg':''}"><span>Neto ${lbl}</span><b>${money(P.neto)}</b></div>
+    </div>
+    <p class="hint caja-note">Neto = cobrado − para instituciones − gastos.${P.prevN?` Además hay ${P.prevN} ${P.prevN===1?'sesión programada':'sesiones programadas'} que todavía no ${P.prevN===1?'ocurrió':'ocurrieron'}, por ${money(P.prev)}; se suman cuando se cobran.`:''}</p>
+    ${body}`;
+}
+function cajaDia(d,P){
+  const ss=P.all;
+  const rows=ss.map(s=>{S.visible[s.id]=s;const p=pat(s.pid),e=item('estadosSesion',s.estado),pg=item('estadosPago',s.pago);
+    const cob=pg?.tipo==='cobrado';const cuenta=cobraOf(s);
+    return `<tr><td>${esc(s.hora||'')}</td><td><button class="linkish" data-a="open-ses" data-id="${esc(s.id)}">${esc(fullName(p)||'Paciente eliminado')}</button><div class="small muted">${esc(instOf(p)?.nombre||'')}</div></td>
+      <td><span class="chip sm"><span class="dot" style="--c:${esc(colorOf('estadosSesion',s.estado))}"></span>${s.estado==='programada'&&isPast(s)?'Sin registrar':esc(e?.nombre||'')}</span></td>
+      <td>${cuenta||s.estado==='programada'?`<span class="${cob?'ok-txt':cuenta?'warn-txt':'muted'}">${esc(cob?pg.nombre:cuenta?'Pendiente de pago':'—')}</span>`:'<span class="muted">No se cobra</span>'}</td>
+      <td class="num">${cuenta||cob||s.estado==='programada'?money(montoOf(s)):'—'}</td><td class="num">${cob&&porcOf(s)?neg(montoOf(s)*porcOf(s)/100):'—'}</td></tr>`}).join('');
+  const gs=S.gastos.filter(g=>g.fecha===d);
+  return `<div class="panel"><div class="panel-head"><h2>Sesiones del día</h2><button class="btn sm" data-a="caja-agenda" data-d="${d}">Ver en la agenda</button></div><div class="scroll"><table>
+    <thead><tr><th>Hora</th><th>Paciente</th><th>Sesión</th><th>Pago</th><th class="num">Honorario</th><th class="num">Institución (−)</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="6" class="muted">No hay sesiones este día.</td></tr>'}</tbody></table></div></div>
+    <div class="panel"><div class="panel-head"><h2>Gastos del día</h2><button class="btn sm" data-a="nav" data-v="gastos">Cargar un gasto</button></div>
+    ${gs.length?`<div class="scroll"><table><tbody>${gs.map(g=>`<tr><td>${esc(item('categoriasGasto',g.categoria)?.nombre||'Sin categoría')}</td><td>${esc(g.descripcion||'')}</td><td class="num">${neg(Number(g.monto||0))}</td></tr>`).join('')}</tbody></table></div>`:'<p class="panel-body muted">No hay gastos este día.</p>'}</div>`;
+}
+function cajaSemana(from){
+  const days=[];const T={ses:0,cob:0,pend:0,inst:0,gas:0,neto:0};
+  for(let i=0;i<7;i++){const d=addDays(from,i);const P=periodMoney(d,d);const n=P.all.filter(s=>s.estado!=='programada'||isPast(s)).length;
+    if(i>=5&&!P.all.length&&!P.gastos&&!S.config.general.finDeSemana) continue;
+    days.push({d,P,n});T.ses+=P.all.length;T.cob+=P.st.cobrado;T.pend+=P.st.pendiente;T.inst+=P.st.inst;T.gas+=P.gastos;T.neto+=P.neto}
+  const max=Math.max(1,...days.map(x=>Math.abs(x.P.neto)));
+  const rows=days.map(({d,P})=>`<tr class="clickable${d===TODAY?' is-sel':''}" data-a="caja-day" data-d="${d}"><td><b>${DIAS[dow(d)-1]}</b> <span class="muted">${fmtShort(d)}</span></td>
+    <td class="num">${P.all.length||'—'}</td><td class="num">${P.st.cobrado?money(P.st.cobrado):'—'}</td><td class="num">${P.st.pendiente?`<span class="warn-txt">${money(P.st.pendiente)}</span>`:'—'}</td>
+    <td class="num">${neg(P.st.inst)}</td><td class="num">${neg(P.gastos)}</td>
+    <td class="num netcell"><span class="nbar ${P.neto<0?'neg':''}" style="width:${Math.round(Math.abs(P.neto)/max*100)}%"></span><b>${money(P.neto)}</b></td></tr>`).join('');
+  return `<div class="panel"><div class="panel-head"><h2>Día por día</h2><span class="small muted">Tocá un día para ver su detalle</span></div><div class="scroll"><table>
+    <thead><tr><th>Día</th><th class="num">Sesiones</th><th class="num">Cobrado</th><th class="num">Pendiente</th><th class="num">Instituciones (−)</th><th class="num">Gastos (−)</th><th class="num">Neto</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr><td>Total de la semana</td><td class="num">${T.ses}</td><td class="num">${money(T.cob)}</td><td class="num">${money(T.pend)}</td><td class="num">${neg(T.inst)}</td><td class="num">${neg(T.gas)}</td><td class="num">${money(T.neto)}</td></tr></tfoot>
+    </table></div></div>`;
+}
+function cajaMesPacientes(P){
+  const all=P.all,st=P.st;
   const byP={};for(const s of all)(byP[s.pid]=byP[s.pid]||[]).push(s);
   const pids=Object.keys(byP).sort((a,b)=>sortName(pat(a)).localeCompare(sortName(pat(b))));
   const rows=pids.map(pid=>{
@@ -961,25 +1075,14 @@ function viewCaja(){
     return `<tr><td class="pname">${esc(fullName(p)||'Paciente eliminado')}<div class="small muted">${esc(instOf(p)?.nombre||'')}</div></td>
       <td class="pills-cell">${ss.map(pillFor).join('')}</td>
       <td class="num">${r.realizadas}</td>
-      <td class="num">${money(r.cobrado)}</td><td class="num">${r.pendiente?`<span style="color:var(--warn)">${money(r.pendiente)}</span>`:'—'}</td>
-      <td class="num">${r.inst?money(r.inst):'—'}</td><td>${esc(item('facturacion',p?.facturacion)?.nombre||'')}</td></tr>`;
+      <td class="num">${money(r.cobrado)}</td><td class="num">${r.pendiente?`<span class="warn-txt">${money(r.pendiente)}</span>`:'—'}</td>
+      <td class="num">${neg(r.inst)}</td><td>${esc(item('facturacion',p?.facturacion)?.nombre||'')}</td></tr>`;
   }).join('');
-  const [y,mm]=m.split('-');
-  return `<div class="view-head"><div><h1>Caja de ${MESES[Number(mm)-1]} ${y}</h1><p class="sub">Del 1 al ${Number(last.slice(8))} de ${MESES[Number(mm)-1]}. Cada sesión cuenta en el mes de su fecha.</p></div>${monthNav()}</div>
-    <div class="kpis">
-      <div class="kpi"><span>Cobrado</span><b>${money(st.cobrado)}</b></div>
-      <div class="kpi ${st.pendiente?'warn':''}"><span>Pendiente de cobro</span><b>${money(st.pendiente)}</b></div>
-      <div class="kpi"><span>Para instituciones</span><b>${money(st.inst)}</b></div>
-      <div class="kpi"><span>Gastos</span><b>${money(gastos)}</b></div>
-      <div class="kpi"><span>Neto del mes</span><b>${money(st.cobrado-st.inst-gastos)}</b></div>
-    </div>
-    <div class="panel"><div class="scroll"><table class="caja-table">
-      <thead><tr><th>Paciente</th><th>Sesiones del mes</th><th class="num">Realizadas</th><th class="num">Cobrado</th><th class="num">Pendiente</th><th class="num">Institución</th><th>Facturación</th></tr></thead>
+  return `<div class="panel"><div class="panel-head"><h2>Por paciente</h2></div><div class="scroll"><table class="caja-table">
+      <thead><tr><th>Paciente</th><th>Sesiones del mes</th><th class="num">Realizadas</th><th class="num">Cobrado</th><th class="num">Pendiente</th><th class="num">Institución (−)</th><th>Facturación</th></tr></thead>
       <tbody>${rows||'<tr><td colspan="7" class="muted">No hay sesiones en este mes.</td></tr>'}</tbody>
-      ${rows?`<tfoot><tr><td>Total</td><td>${st.total} sesiones, ${st.canceladas} sin realizar</td><td class="num">${st.realizadas}</td><td class="num">${money(st.cobrado)}</td><td class="num">${money(st.pendiente)}</td><td class="num">${money(st.inst)}</td><td></td></tr></tfoot>`:''}
-    </table></div></div>
-    ${weekdayPanel(m,all)}
-    ${yearChart(y)}`;
+      ${rows?`<tfoot><tr><td>Total</td><td>${st.total} sesiones, ${st.canceladas} sin realizar</td><td class="num">${st.realizadas}</td><td class="num">${money(st.cobrado)}</td><td class="num">${money(st.pendiente)}</td><td class="num">${neg(st.inst)}</td><td></td></tr></tfoot>`:''}
+    </table></div></div>`;
 }
 function weekdayPanel(m,all){
   const first=m+'-01',last=lastOfMonth(m);
@@ -1127,6 +1230,7 @@ function viewConfig(){
       <div class="field"><label for="c_ini">La agenda empieza a las</label><select class="select" id="c_ini" data-c="gen" data-k="inicio" data-num="1">${hourOpts(g.inicio)}</select></div>
       <div class="field"><label for="c_fin">Y termina a las</label><select class="select" id="c_fin" data-c="gen" data-k="fin" data-num="1">${hourOpts(g.fin)}</select></div>
       <div class="field"><label for="c_dur">Duración habitual de la sesión (min)</label><input class="input" type="number" min="10" step="5" id="c_dur" data-c="gen" data-k="duracion" data-num="1" value="${esc(g.duracion)}"></div>
+      <div class="field"><label for="c_alerta">Avisar pagos pendientes después de (días)</label><input class="input" type="number" min="1" step="1" id="c_alerta" data-c="gen" data-k="alertaDias" data-num="1" value="${esc(alertaDias())}"></div>
       <div class="field"><label for="c_vista">Vista inicial de la agenda</label><select class="select" id="c_vista" data-c="gen" data-k="vistaInicial">${[['dia','Día'],['semana','Semana'],['mes','Mes']].map(([v,l])=>`<option value="${v}"${g.vistaInicial===v?' selected':''}>${l}</option>`).join('')}</select></div>
       <div class="field"><label>Fin de semana</label><label class="check"><input type="checkbox" data-c="gen" data-k="finDeSemana" ${g.finDeSemana?'checked':''}>Mostrar sábado y domingo siempre</label></div>
     </div></div></section>
@@ -1314,6 +1418,17 @@ document.addEventListener('click',async ev=>{
     case 'wk-month':{const n=Number(a.dataset.n);S.wkMonth=n?addMonths(S.wkMonth||monthKey(TODAY),n):monthKey(TODAY);S.wkSel=null;render();break}
     case 'wk-sel':{S.wkSel=a.dataset.d;render();document.querySelector('.wk-detail-head')?.scrollIntoView({block:'start'});break}
     case 'wk-step':{const d=addDays(S.wkSel,7*Number(a.dataset.n));const m=monthKey(addDays(d,3));S.wkMonth=m;S.wkSel=d;render();break}
+    case 'alerta-close': document.getElementById('alerta').close();break;
+    case 'al-pay':{const s=S.visible[a.dataset.id]||findSession(a.dataset.id);if(!s)break;const saved=saveSession({...s,pago:firstCobrado()});render();renderAlerta();offerAttach(saved);break}
+    case 'al-snooze':{const s=S.visible[a.dataset.id]||findSession(a.dataset.id);if(!s)break;saveSession({...s,alertaHasta:addDays(TODAY,3)});render();renderAlerta();toast('Te vuelvo a avisar en 3 días');break}
+    case 'al-goto':{const s=S.visible[a.dataset.id]||findSession(a.dataset.id);document.getElementById('alerta').close();if(!s)break;S.view='agenda';S.cursor=s.fecha;render();focusSession(s.id);break}
+    case 'alerta-open': checkOverdue(true);break;
+    case 'caja-view': S.cajaV=a.dataset.v;render();break;
+    case 'caja-nav':{const n=Number(a.dataset.n);const c=S.cajaCur||TODAY;
+      S.cajaCur=!n?TODAY:S.cajaV==='dia'?addDays(c,n):S.cajaV==='semana'?addDays(c,7*n):addMonths(monthKey(c),n)+'-01';render();break}
+    case 'caja-day': S.cajaV='dia';S.cajaCur=a.dataset.d;render();window.scrollTo(0,0);break;
+    case 'caja-go': S.view='caja';S.cajaV=a.dataset.v;S.cajaCur=a.dataset.d;render();window.scrollTo(0,0);break;
+    case 'caja-agenda': S.view='agenda';S.ag='dia';S.cursor=a.dataset.d;render();window.scrollTo(0,0);break;
     case 'month':{const n=Number(a.dataset.n);S.month=n?addMonths(S.month,n):monthKey(TODAY);render();break}
     case 'open-ses':{const s=S.visible[a.dataset.id];if(s) openPop(s,a.closest('.blk,.mitem,.side-row')||a);break}
     case 'pop-close': closePop();break;
@@ -1541,6 +1656,8 @@ document.addEventListener('pointerup',async ()=>{
   else { for(const [id,d] of Object.entries(docs)) applyDoc(id,d); }
   gate(null);
   setTimeout(autoBackup,3000);
+  setTimeout(()=>checkOverdue(false),1500);
+  setInterval(()=>{if(document.visibilityState==='visible')checkOverdue(false)},30*60*1000);
   S.ag=S.config.general.vistaInicial||(window.innerWidth<760?'dia':'semana');
   if(window.innerWidth<760&&S.ag==='semana') S.ag='dia';
   S.ready=true;render();
