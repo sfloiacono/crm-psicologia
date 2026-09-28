@@ -42,6 +42,7 @@ window.FB = {
     collection, doc, setDoc, getDoc, deleteDoc, onSnapshot },
   datos: () => collection(db, 'consultorios', CONSULTORIO, 'datos'),
   datoRef: id => doc(db, 'consultorios', CONSULTORIO, 'datos', id),
-  archivoRef: id => doc(db, 'consultorios', CONSULTORIO, 'archivos', id)
+  archivoRef: id => doc(db, 'consultorios', CONSULTORIO, 'archivos', id),
+  respaldoRef: id => doc(db, 'consultorios', CONSULTORIO, 'respaldos', id)
 };
 window.dispatchEvent(new Event('fb-ready'));

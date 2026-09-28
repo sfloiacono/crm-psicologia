@@ -241,6 +241,7 @@ function applyDoc(id,data){
   else if(id==='patients'){ S.patients=(data?.items||[]).map(p=>{ if(p.apellido==null){const t=String(p.nombre||'').trim().split(/\s+/);p={...p,nombre:t.shift()||'',apellido:t.join(' ')}} return p; }).map(p=>({...p,horarios:(p.horarios||[]).map(h=>({...h,id:h.id||('h_'+p.id+'_'+h.dia+'_'+String(h.hora||'').replace(':','')),duracion:Number(h.duracion||S.config?.general?.duracion||50)}))})); }
   else if(id==='gastos') S.gastos=data?.items||[];
   else if(id==='comprobantes') S.comps=data?.items||[];
+  else if(id==='respaldos') S.respaldos=data?.items||[];
   else if(id.startsWith('ses-')){ if(data) S.ses[id]=data; else delete S.ses[id]; }
 }
 const saveConfig=()=>Store.save('config',S.config);
@@ -403,15 +404,117 @@ const cobraOf=s=>{const m=modeOf(item('estadosSesion',s.estado));return m==='si'
 const realizadaId=()=>item('estadosSesion','realizada')?'realizada':(list('estadosSesion').find(x=>modeOf(x)==='si')?.id||'realizada');
 
 function monthsBetween(from,to){const out=[];let m=monthKey(from);const e=monthKey(to);while(m<=e){out.push(m);m=addMonths(m,1)}return out}
+/* ============ Copias de seguridad y papelera ============ */
+const BK_MAX=20, BK_AUTO_HORAS=20, DESCARGA_DIAS=30, LK_DESC='psiconflor-ultima-descarga', LK_POSP='psiconflor-recordar-descarga';
+const vivo=p=>p&&!p.eliminado;
+const pidVivo=pid=>{const p=pat(pid);return !p||!p.eliminado};
+function allDocs(){return {config:S.config,patients:{items:S.patients},gastos:{items:S.gastos},comprobantes:{items:S.comps},...S.ses}}
+function fmtFechaHora(isoStr){const d=new Date(isoStr);return `${DIAS_C[(d.getDay()+6)%7]} ${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}`}
+function makeBackup(motivo){
+  if(!Store.fb||!S.config) return null;
+  const rid='r'+Date.now();const docs=JSON.parse(JSON.stringify(allDocs()));const ids=Object.keys(docs);
+  for(const id of ids) FB.fns.setDoc(FB.respaldoRef(`${rid}__${id}`),{rid,id,data:docs[id]}).catch(()=>{});
+  const entry={id:rid,fecha:new Date().toISOString(),por:Store.email||'',motivo,docs:ids,pacientes:S.patients.filter(vivo).length};
+  const items=[entry,...(S.respaldos||[])];
+  for(const o of items.slice(BK_MAX)) for(const id of (o.docs||[])) FB.fns.deleteDoc(FB.respaldoRef(`${o.id}__${id}`)).catch(()=>{});
+  S.respaldos=items.slice(0,BK_MAX);Store.save('respaldos',{items:S.respaldos});
+  return entry;
+}
+function autoBackup(){
+  if(!Store.fb) return;
+  const last=(S.respaldos||[]).find(r=>r.motivo==='Automática');
+  if(!last||(Date.now()-new Date(last.fecha).getTime())>BK_AUTO_HORAS*3600*1000) makeBackup('Automática');
+}
+async function restoreBackup(rid){
+  const e=(S.respaldos||[]).find(r=>r.id===rid);if(!e)return;
+  const ok=await confirmBox('Restaurar copia',`Los datos del consultorio vuelven a como estaban el ${fmtFechaHora(e.fecha)}, para todas las cuentas. Antes de restaurar se guarda una copia del estado actual, por si necesitás volver atrás.`,'Restaurar',false);
+  if(!ok) return;
+  toast('Restaurando la copia…');
+  let snaps;
+  try{snaps=await Promise.all(e.docs.map(id=>FB.fns.getDoc(FB.respaldoRef(`${rid}__${id}`))))}catch(err){toast('No se pudo leer la copia. Revisá la conexión.');return}
+  const docs={};for(const s of snaps){if(s.exists()){const v=s.data();docs[v.id]=v.data}}
+  if(!docs.config){toast('Esta copia está incompleta y no se puede restaurar.');return}
+  makeBackup('Antes de restaurar');
+  for(const id of ['patients','gastos','comprobantes',...Object.keys(S.ses)]) if(!(id in docs)) await Store.remove(id);
+  S.ses={};for(const [id,d] of Object.entries(docs)){applyDoc(id,d);Store.save(id,d)}
+  render();toast('Copia restaurada');
+}
+function downloadBackup(){
+  const data=JSON.stringify({app:'consultorio-psiconflor',version:3,exportado:TODAY,docs:allDocs()},null,2);
+  const filename=`psiconflor-copia-${TODAY}.json`;
+  const url=URL.createObjectURL(new Blob([data],{type:'application/json'}));const l=document.createElement('a');l.href=url;l.download=filename;document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+  try{localStorage.setItem(LK_DESC,TODAY);localStorage.removeItem(LK_POSP)}catch(e){}
+  toast('Copia descargada. Guardala en un lugar seguro, por ejemplo en tu Google Drive.');
+}
+function lastDownload(){try{return localStorage.getItem(LK_DESC)||''}catch(e){return ''}}
+function needDownloadReminder(){
+  if(!Store.fb) return false;
+  try{const posp=localStorage.getItem(LK_POSP);if(posp&&posp>TODAY)return false}catch(e){}
+  const l=lastDownload();return !l||daysBetween(l,TODAY)>=DESCARGA_DIAS;
+}
+function downloadNotice(){
+  if(!needDownloadReminder()) return '';
+  const l=lastDownload();
+  return `<div class="notice">${ICONS.info}<p style="flex:1">${l?`Hace más de un mes que no descargás una copia de seguridad a este dispositivo (la última fue el ${fmtShort(l)}).`:'Todavía no descargaste ninguna copia de seguridad a este dispositivo.'} La nube guarda copias automáticas, pero conviene tener también una propia.</p>
+    <button class="btn sm" data-a="export">Descargar ahora</button><button class="btn ghost sm" data-a="dl-later">Más tarde</button></div>`;
+}
+/* Confirmación escribiendo una palabra */
+function typedConfirm(title,text,word,okLabel){
+  const c=document.getElementById('confirm');
+  c.innerHTML=`<div class="dlg-head"><h2>${esc(title)}</h2></div><div class="dlg-body"><p>${esc(text)}</p>
+    <label class="field" style="margin-top:14px"><span class="small muted">Para confirmar, escribí <b>${esc(word)}</b></span><input class="input" id="typedIn" autocomplete="off" autocapitalize="characters"></label></div>
+    <div class="dlg-foot"><span></span><div class="btn-group"><button class="btn" value="no">Cancelar</button><button class="btn primary" value="ok" id="typedOk" disabled style="background:var(--danger);border-color:var(--danger)">${esc(okLabel)}</button></div></div>`;
+  return new Promise(res=>{
+    const inp=c.querySelector('#typedIn'),okb=c.querySelector('#typedOk');
+    inp.oninput=()=>{okb.disabled=inp.value.trim().toUpperCase()!==word};
+    c.querySelectorAll('button').forEach(b=>b.onclick=()=>{if(b.value==='ok'&&okb.disabled)return;c.close();res(b.value==='ok')});
+    c.oncancel=()=>res(false);c.showModal();inp.focus();
+  });
+}
+/* Aviso con "Deshacer" */
+function toastUndo(msg,undo){
+  const el=document.getElementById('offer');
+  el.innerHTML=`<span>${esc(msg)}</span><button class="btn sm" data-a="undo">Deshacer</button>`;
+  S.undoFn=undo;el.hidden=false;clearTimeout(offerT);offerT=setTimeout(()=>{el.hidden=true;S.undoFn=null},8000);
+}
+/* Paneles de Configuración */
+function backupPanel(){
+  if(!Store.fb) return '';
+  const rs=S.respaldos||[];
+  return `<section class="panel" style="margin-top:16px"><div class="panel-head"><div><h2>Copias de seguridad</h2>
+      <p class="small muted" style="margin-top:3px">La app guarda una copia automática en la nube cada día, apenas alguien la abre, y conserva las últimas ${BK_MAX}. También se guarda una antes de borrar o restaurar datos.</p></div>
+      <button class="btn" data-a="bk-now">Hacer una copia ahora</button></div>
+    ${rs.length?`<div class="scroll"><table><thead><tr><th>Fecha</th><th>Motivo</th><th>Hecha por</th><th class="num">Pacientes</th><th></th></tr></thead><tbody>
+      ${rs.map(r=>`<tr><td>${fmtFechaHora(r.fecha)}</td><td>${esc(r.motivo)}</td><td class="small">${esc(r.por)}</td><td class="num">${r.pacientes??'—'}</td><td class="num"><button class="btn sm" data-a="bk-restore" data-id="${esc(r.id)}">Restaurar</button></td></tr>`).join('')}
+    </tbody></table></div>`:'<p class="panel-body muted">Todavía no hay copias. La primera se hace automáticamente.</p>'}
+    <div class="panel-body"><p class="small muted">${lastDownload()?`Última copia descargada a este dispositivo: ${fmtShort(lastDownload())}.`:'Todavía no descargaste copias a este dispositivo.'} Una vez por mes, conviene descargar una y guardarla en tu Google Drive o en un pendrive. Los archivos de los comprobantes no se incluyen en la descarga.</p></div></section>`;
+}
+function trashPanel(){
+  const del=S.patients.filter(p=>p.eliminado);
+  return `<section class="panel" style="margin-top:16px"><div class="panel-head"><div><h2>Papelera</h2>
+    <p class="small muted" style="margin-top:3px">Los pacientes eliminados quedan acá, con sus sesiones y comprobantes, hasta que los restaures o los elimines definitivamente.</p></div></div>
+    ${del.length?`<div class="scroll"><table><tbody>${del.map(p=>`<tr><td><b>${esc(fullName(p))}</b><div class="small muted">Eliminado el ${fmtShort(p.eliminadoEl||TODAY)}</div></td>
+      <td class="num"><button class="btn sm" data-a="trash-restore" data-id="${esc(p.id)}">Restaurar</button> <button class="btn danger sm" data-a="trash-purge" data-id="${esc(p.id)}">Eliminar definitivamente</button></td></tr>`).join('')}</tbody></table></div>`
+    :'<p class="panel-body muted">La papelera está vacía.</p>'}</section>`;
+}
+function purgePatient(pid){
+  S.patients=S.patients.filter(x=>x.id!==pid);savePatients();
+  for(const [k,d] of Object.entries(S.ses)){let ch=false;for(const id in d.items){if(d.items[id].pid===pid){delete d.items[id];ch=true}}if(ch)Store.save(k,d)}
+  const cs=S.comps.filter(c=>c.pid===pid);
+  for(const c of cs){if(c.fileDoc&&Store.fb)FB.fns.deleteDoc(FB.archivoRef(c.id)).catch(()=>{});if(c.asset&&S.assets)S.assets.delete(c.asset).catch(()=>{})}
+  if(cs.length){S.comps=S.comps.filter(c=>c.pid!==pid);saveComps()}
+}
+
 function sessionsInRange(from,to){
   const out=new Map();
   for(const m of monthsBetween(from,to)){
     const doc=S.ses['ses-'+m]; if(!doc) continue;
-    for(const s of Object.values(doc.items||{})) if(s.fecha>=from&&s.fecha<=to) out.set(s.id,s);
+    for(const s of Object.values(doc.items||{})) if(s.fecha>=from&&s.fecha<=to&&pidVivo(s.pid)) out.set(s.id,s);
   }
   for(let d=from;d<=to;d=addDays(d,1)){
     const wd=dow(d);
     for(const p of S.patients){
+      if(p.eliminado) continue;
       if(d>=TODAY&&!item('estadosPaciente',p.estado)?.agenda) continue;
       for(const h of (p.horarios||[])){
         if(Number(h.dia)!==wd||!h.hora) continue;
@@ -463,7 +566,7 @@ const gastosMes=m=>S.gastos.filter(g=>monthKey(g.fecha||'')===m);
 const unmarkedList=()=>sessionsInRange(addDays(TODAY,-90),TODAY).filter(s=>s.estado==='programada'&&isPast(s));
 function debtList(){
   const arr=[];for(const d of Object.values(S.ses)) for(const s of Object.values(d.items||{})){
-    if(s.oculta) continue;
+    if(s.oculta||!pidVivo(s.pid)) continue;
     if(cobraOf(s)&&item('estadosPago',s.pago)?.tipo==='pendiente') arr.push(s);
   }
   return arr.sort((a,b)=>(a.fecha+(a.hora||'')).localeCompare(b.fecha+(b.hora||'')));
@@ -542,6 +645,7 @@ function viewAgenda(){
     <div class="btn-group"><div class="seg" role="group" aria-label="Vista">${seg}</div>
     <button class="btn icon" data-a="ag-nav" data-n="-1" aria-label="Anterior">‹</button><button class="btn" data-a="ag-nav" data-n="0">Hoy</button><button class="btn icon" data-a="ag-nav" data-n="1" aria-label="Siguiente">›</button>
     <button class="btn${panelOpen?' on':''}" data-a="panel-toggle" aria-expanded="${panelOpen}">Pendientes${pendCount?` <em class="count">${pendCount}</em>`:''}</button></div></div>
+    ${downloadNotice()}
     ${S.patients.length?'':`<div class="notice">${ICONS.info}<p>Todavía no cargaste pacientes. Creá uno en Pacientes con su horario y la agenda se completa sola.</p></div>`}
     <div class="ag-layout${panelOpen?' with-panel':''}">
       <div class="ag-main">${body}<p class="hint" style="margin-top:10px">${hint}</p></div>
@@ -874,13 +978,38 @@ function viewCaja(){
       <tbody>${rows||'<tr><td colspan="7" class="muted">No hay sesiones en este mes.</td></tr>'}</tbody>
       ${rows?`<tfoot><tr><td>Total</td><td>${st.total} sesiones, ${st.canceladas} sin realizar</td><td class="num">${st.realizadas}</td><td class="num">${money(st.cobrado)}</td><td class="num">${money(st.pendiente)}</td><td class="num">${money(st.inst)}</td><td></td></tr></tfoot>`:''}
     </table></div></div>
+    ${weekdayPanel(m,all)}
     ${yearChart(y)}`;
+}
+function weekdayPanel(m,all){
+  const first=m+'-01',last=lastOfMonth(m);
+  const rows=[];
+  for(let wd=1;wd<=7;wd++){
+    const fechas=[];for(let d=first;d<=last;d=addDays(d,1)) if(dow(d)===wd) fechas.push(d);
+    const ss=all.filter(s=>dow(s.fecha)===wd&&(s.estado==='programada'||cobraOf(s)));
+    const noRe=all.filter(s=>dow(s.fecha)===wd&&s.estado!=='programada'&&!cobraOf(s)).length;
+    if(!ss.length&&!noRe) continue;
+    let total=0,cob=0;for(const s of ss){const mt=montoOf(s);total+=mt;if(item('estadosPago',s.pago)?.tipo==='cobrado')cob+=mt}
+    rows.push({wd,fechas,ses:ss.length,pac:new Set(ss.map(s=>s.pid)).size,total,cob,pend:total-cob,noRe});
+  }
+  if(!rows.length) return '';
+  const T=rows.reduce((a,r)=>({ses:a.ses+r.ses,total:a.total+r.total,cob:a.cob+r.cob,pend:a.pend+r.pend,noRe:a.noRe+r.noRe}),{ses:0,total:0,cob:0,pend:0,noRe:0});
+  const pacT=new Set(all.filter(s=>s.estado==='programada'||cobraOf(s)).map(s=>s.pid)).size;
+  return `<div class="panel"><div class="panel-head"><div><h2>Por día de la semana</h2>
+    <p class="small muted" style="margin-top:3px">Pacientes y sesiones que se atienden cada día, estén pagadas o no. Incluye las sesiones realizadas, las que se cobran aunque se hayan cancelado y las que todavía no ocurrieron.</p></div></div>
+    <div class="scroll"><table><thead><tr><th>Día</th><th>Fechas del mes</th><th class="num">Pacientes</th><th class="num">Sesiones</th><th class="num">Total a facturar</th><th class="num">Cobrado</th><th class="num">Falta cobrar</th><th class="num">No realizadas</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td><b>${DIAS[r.wd-1]}</b></td><td class="small muted">${r.fechas.map(d=>dayNum(d)).join(', ')}</td>
+      <td class="num">${r.pac}</td><td class="num">${r.ses}</td><td class="num"><b>${money(r.total)}</b></td><td class="num">${money(r.cob)}</td>
+      <td class="num">${r.pend?`<span style="color:var(--warn)">${money(r.pend)}</span>`:'—'}</td><td class="num">${r.noRe||'—'}</td></tr>`).join('')}</tbody>
+    <tfoot><tr><td>Total del mes</td><td></td><td class="num">${pacT}</td><td class="num">${T.ses}</td><td class="num">${money(T.total)}</td><td class="num">${money(T.cob)}</td><td class="num">${T.pend?money(T.pend):'—'}</td><td class="num">${T.noRe||'—'}</td></tr></tfoot>
+    </table></div>
+    <p class="hint panel-body" style="padding-top:8px">"Falta cobrar" suma lo pendiente de pago y las sesiones que todavía no ocurrieron. "No realizadas" cuenta las cancelaciones y ausencias que no se cobran; no suman al total.</p></div>`;
 }
 function yearChart(y){
   const data=[];
   for(let i=1;i<=12;i++){
     const m=`${y}-${pad(i)}`;const doc=S.ses['ses-'+m];
-    const st=stats(Object.values(doc?.items||{}).filter(s=>!s.oculta));
+    const st=stats(Object.values(doc?.items||{}).filter(s=>!s.oculta&&pidVivo(s.pid)));
     const g=gastosMes(m).reduce((a,x)=>a+Number(x.monto||0),0);
     data.push({c:st.cobrado,g,n:st.cobrado-st.inst-g});
   }
@@ -911,14 +1040,14 @@ function patientHistory(pid){
 }
 function viewPacientes(){
   const q=S.q.trim().toLowerCase();
-  const ps=S.patients.filter(p=>(!S.filtroEstado||p.estado===S.filtroEstado)&&(!q||fullName(p).toLowerCase().includes(q)||(p.hc||'').includes(q)))
+  const ps=S.patients.filter(p=>!p.eliminado&&(!S.filtroEstado||p.estado===S.filtroEstado)&&(!q||fullName(p).toLowerCase().includes(q)||(p.hc||'').includes(q)))
     .sort((a,b)=>sortName(a).localeCompare(sortName(b)));
   const rows=ps.map(p=>{const h=patientHistory(p.id);const e=item('estadosPaciente',p.estado);
     return `<tr class="clickable" data-a="pac-open" data-id="${esc(p.id)}"><td>${esc(p.hc||'')}</td><td><b>${esc(fullName(p))}</b><div class="small muted">${esc(item('modalidades',p.modalidad)?.nombre||'')}</div></td>
     <td>${esc(horarioTxt(p))}</td><td>${esc(instOf(p)?.nombre||'')}</td><td class="num">${money(p.honorario)}</td>
     <td><span class="chip"><span class="dot" style="--c:${esc(e?.color||'#999')}"></span>${esc(e?.nombre||'Sin estado')}</span></td>
     <td class="num">${h.pendiente?`<span style="color:var(--warn)">${money(h.pendiente)}</span>`:'—'}</td></tr>`}).join('');
-  return `<div class="view-head"><div><h1>Pacientes</h1><p class="sub">${S.patients.length} en total, ${S.patients.filter(p=>item('estadosPaciente',p.estado)?.agenda).length} en agenda</p></div>
+  return `<div class="view-head"><div><h1>Pacientes</h1><p class="sub">${S.patients.filter(vivo).length} en total, ${S.patients.filter(p=>vivo(p)&&item('estadosPaciente',p.estado)?.agenda).length} en agenda</p></div>
     <button class="btn primary" data-a="pac-new">Nuevo paciente</button></div>
     <div class="panel"><div class="panel-head"><div class="toolbar">
       <input class="input" type="search" placeholder="Buscar por nombre o HC" value="${esc(S.q)}" data-c="pac-q" aria-label="Buscar paciente">
@@ -1008,7 +1137,8 @@ function viewConfig(){
       <label class="btn">Restaurar desde una copia<input type="file" accept=".json,application/json" data-c="import" hidden></label>
       ${Store.fb?'<button class="btn" data-a="logout">Cerrar sesión</button>':''}
       <button class="btn danger" data-a="reset">Borrar todos los datos</button>
-    </div></section>`;
+    </div></section>
+    ${backupPanel()}${trashPanel()}`;
 }
 
 /* ============ Diálogos ============ */
@@ -1057,7 +1187,7 @@ function newSesDialog(fecha,hora){
   S.edit={id:'x_'+uid(),fecha,hora:hora||'',extra:true,isNew:true};
   openDlg(`<div class="dlg-head"><div><h2>Nueva sesión</h2><p class="muted small">Sesión fuera del horario habitual, única o de un paciente nuevo</p></div><button class="btn ghost icon" data-a="dlg-close" aria-label="Cerrar">✕</button></div>
   <div class="dlg-body"><div class="form">
-    <div class="field full"><label for="f_pid">Paciente</label><select class="select" id="f_pid">${[...S.patients].sort((a,b)=>sortName(a).localeCompare(sortName(b))).map(x=>`<option value="${esc(x.id)}">${esc(fullName(x))}</option>`).join('')}</select></div>
+    <div class="field full"><label for="f_pid">Paciente</label><select class="select" id="f_pid">${S.patients.filter(vivo).sort((a,b)=>sortName(a).localeCompare(sortName(b))).map(x=>`<option value="${esc(x.id)}">${esc(fullName(x))}</option>`).join('')}</select></div>
     <div class="field"><label for="f_fecha">Fecha</label><input class="input" type="date" id="f_fecha" value="${esc(fecha)}"></div>
     <div class="field"><label for="f_hora">Hora</label><input class="input" type="time" id="f_hora" value="${esc(hora||'')}"></div>
     <div class="field"><label for="f_dur">Duración (min)</label><input class="input" type="number" min="10" step="5" id="f_dur" value="${defDur()}"></div>
@@ -1260,17 +1390,25 @@ document.addEventListener('click',async ev=>{
       savePatients();closeDlg();toast(e.isNew?'Paciente creado':split?'Ficha actualizada. El nuevo horario rige desde hoy.':'Ficha actualizada');break}
     case 'pac-del':{
       const e=S.edit;
-      const ok=await confirmBox('Eliminar paciente',`Se borran la ficha de ${fullName(e)} y todas sus sesiones registradas. Si terminó el tratamiento, conviene cambiar su estado a un alta para conservar el historial.`,'Eliminar');
+      const ok=await confirmBox('Mover a la papelera',`La ficha de ${fullName(e)} se mueve a la papelera, con sus sesiones y comprobantes, y deja de aparecer en la agenda y en la caja. La podés restaurar desde Configuración > Papelera. Si terminó el tratamiento, conviene cambiar su estado a un alta en lugar de eliminarla.`,'Mover a la papelera');
       if(!ok) break;
-      S.patients=S.patients.filter(x=>x.id!==e.id);savePatients();
-      for(const [k,d] of Object.entries(S.ses)){let ch=false;for(const id in d.items){if(d.items[id].pid===e.id){delete d.items[id];ch=true}}if(ch)Store.save(k,d)}
-      closeDlg();toast('Paciente eliminado');break}
+      const pp=pat(e.id);if(pp){pp.eliminado=true;pp.eliminadoEl=TODAY;savePatients()}
+      closeDlg();toastUndo(`${fullName(e)} se movió a la papelera.`,()=>{const q=pat(e.id);if(q){delete q.eliminado;delete q.eliminadoEl;savePatients();render();toast('Paciente restaurado')}});break}
+    case 'trash-restore':{const q=pat(a.dataset.id);if(q){delete q.eliminado;delete q.eliminadoEl;savePatients();render();toast(`${fullName(q)} volvió a la lista de pacientes`)}break}
+    case 'trash-purge':{const q=pat(a.dataset.id);if(!q)break;
+      const ok=await typedConfirm('Eliminar definitivamente',`Se borran para siempre la ficha de ${fullName(q)}, todas sus sesiones y sus comprobantes. Esta acción no se puede deshacer, salvo restaurando una copia de seguridad anterior.`,'ELIMINAR','Eliminar definitivamente');
+      if(!ok)break;makeBackup('Antes de eliminar un paciente');purgePatient(q.id);render();toast('Paciente eliminado definitivamente');break}
+    case 'bk-now':{const r=makeBackup('Manual');render();toast(r?'Copia guardada en la nube':'No se pudo hacer la copia');break}
+    case 'bk-restore': restoreBackup(a.dataset.id);break;
+    case 'dl-later':{try{localStorage.setItem(LK_POSP,addDays(TODAY,7))}catch(e){}render();break}
+    case 'undo':{const f=S.undoFn;S.undoFn=null;closeOffer();if(f)f();break}
     case 'gasto-add':{
       const monto=Number(val('g_monto'));const fecha=val('g_fecha');
       if(!fecha||!monto){toast('Completá la fecha y el monto');break}
       S.gastos.push({id:uid(),fecha,categoria:val('g_cat'),descripcion:val('g_desc').trim(),medio:val('g_medio'),monto});
       saveGastos();if(monthKey(fecha)!==S.month)S.month=monthKey(fecha);render();toast('Gasto agregado');break}
-    case 'gasto-del':{S.gastos=S.gastos.filter(g=>g.id!==a.dataset.id);saveGastos();render();toast('Gasto eliminado');break}
+    case 'gasto-del':{const g=S.gastos.find(x=>x.id===a.dataset.id);if(!g)break;S.gastos=S.gastos.filter(x=>x.id!==g.id);saveGastos();render();
+      toastUndo('Gasto eliminado.',()=>{S.gastos.push(g);saveGastos();render();toast('Gasto restaurado')});break}
     case 'gasto-copy':{
       const prev=gastosMes(addMonths(S.month,-1));
       for(const g of prev){const day=Math.min(Number(g.fecha.slice(8)),Number(lastOfMonth(S.month).slice(8)));S.gastos.push({...g,id:uid(),fecha:`${S.month}-${pad(day)}`})}
@@ -1287,6 +1425,7 @@ document.addEventListener('click',async ev=>{
       if(!ok) break;
       S.config.lists[k]=list(k).filter(x=>x.id!==id);saveConfig();render();break}
     case 'export':{
+      if(Store.fb){downloadBackup();render();break}
       const docs={config:S.config,patients:{items:S.patients},gastos:{items:S.gastos},comprobantes:{items:S.comps},...S.ses};
       const data=JSON.stringify({app:'consultorio',version:2,exportado:TODAY,docs},null,2);
       const filename=`consultorio-copia-${TODAY}.json`;
@@ -1294,9 +1433,11 @@ document.addEventListener('click',async ev=>{
       else{const url=URL.createObjectURL(new Blob([data],{type:'application/json'}));const l=document.createElement('a');l.href=url;l.download=filename;document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(url),2000)}
       break}
     case 'reset':{
-      const ok=await confirmBox('Borrar todos los datos',`Se eliminan pacientes, sesiones, gastos y configuración${Store.fb?' para todas las cuentas autorizadas':''}. Esta acción no se puede deshacer. Descargá una copia antes si la necesitás.`,'Borrar todo');
+      const ok=await typedConfirm('Borrar todos los datos',`Se eliminan pacientes, sesiones, gastos, comprobantes y configuración${Store.fb?' para todas las cuentas autorizadas':''}.${Store.fb?' Antes de borrar se guarda una copia de seguridad en la nube, desde la que podés recuperar todo.':' Esta acción no se puede deshacer.'}`,'BORRAR','Borrar todo');
       if(!ok) break;
-      const ids=['config','patients','gastos',...Object.keys(S.ses)];
+      makeBackup('Antes de borrar todo');
+      const ids=['config','patients','gastos','comprobantes',...Object.keys(S.ses)];
+      S.comps=[];
       S.ses={};S.patients=[];S.gastos=[];S.config=defaultConfig();
       for(const id of ids) await Store.remove(id);
       saveConfig();render();toast('Datos borrados');break}
@@ -1321,8 +1462,9 @@ document.addEventListener('change',async ev=>{
     const file=el.files?.[0];if(!file)return;
     try{
       const j=JSON.parse(await file.text());if(!j?.docs?.config) throw new Error();
-      const ok=await confirmBox('Restaurar copia',`Se reemplazan todos los datos actuales por los de la copia del ${j.exportado||'archivo elegido'}.`,'Restaurar');
+      const ok=await confirmBox('Restaurar copia',`Se reemplazan todos los datos actuales por los de la copia del ${j.exportado||'archivo elegido'}.${Store.fb?' Antes se guarda una copia del estado actual en la nube.':''}`,'Restaurar');
       if(!ok){el.value='';return}
+      makeBackup('Antes de restaurar desde archivo');
       for(const id of ['config','patients','gastos',...Object.keys(S.ses)]) if(!(id in j.docs)) await Store.remove(id);
       S.ses={};for(const [id,d] of Object.entries(j.docs)){applyDoc(id,d);Store.save(id,d)}
       render();toast('Copia restaurada');
@@ -1398,6 +1540,7 @@ document.addEventListener('pointerup',async ()=>{
   }
   else { for(const [id,d] of Object.entries(docs)) applyDoc(id,d); }
   gate(null);
+  setTimeout(autoBackup,3000);
   S.ag=S.config.general.vistaInicial||(window.innerWidth<760?'dia':'semana');
   if(window.innerWidth<760&&S.ag==='semana') S.ag='dia';
   S.ready=true;render();

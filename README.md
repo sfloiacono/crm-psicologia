@@ -30,6 +30,15 @@ Hay que cambiarla en **dos lugares**, y las dos listas tienen que coincidir:
 1. **En Firebase:** Firestore Database > Reglas. Agregar o borrar el email en la lista y tocar **Publicar**.
 2. **En este repositorio:** en el archivo `firebase.js`, en la lista `AUTORIZADOS`. Después, subir el archivo a GitHub.
 
+## Copias de seguridad y papelera
+
+- **Copias automáticas en la nube:** cada día, la primera vez que alguien abre la app, se guarda una copia completa. Se conservan las últimas 20.
+- **Copias antes de acciones riesgosas:** también se guarda una copia antes de borrar todos los datos, restaurar una copia o eliminar definitivamente a un paciente.
+- **Restaurar:** en Configuración > Copias de seguridad, cada copia tiene su botón "Restaurar". Antes de restaurar, se guarda una copia del estado actual.
+- **Copia descargada:** una vez por mes, la app recuerda descargar una copia al dispositivo. Conviene guardarla en Google Drive o en un pendrive, porque protege incluso si se pierde el acceso al proyecto de Firebase. No incluye los archivos de los comprobantes.
+- **Papelera:** los pacientes eliminados van a Configuración > Papelera, con sus sesiones y comprobantes, y se pueden restaurar.
+- **Confirmaciones:** borrar todos los datos o eliminar un paciente definitivamente requiere escribir una palabra para confirmar. Los gastos eliminados se pueden recuperar con "Deshacer".
+
 ## Estructura
 
 ```
