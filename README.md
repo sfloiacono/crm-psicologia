@@ -31,6 +31,12 @@ Hay que cambiarla en **dos lugares**, y las dos listas tienen que coincidir:
 1. **En Firebase:** Firestore Database > Reglas. Agregar o borrar el email en la lista y tocar **Publicar**.
 2. **En este repositorio:** en el archivo `firebase.js`, en la lista `AUTORIZADOS`. Después, subir el archivo a GitHub.
 
+## PIN y bloqueo automático
+
+- Cada dispositivo puede tener su propio PIN de 4 dígitos (Configuración > Seguridad de este dispositivo).
+- La app se bloquea al abrirla, después de un tiempo sin uso (de 1 a 30 minutos) y, si se elige, al cambiar de app o de pestaña.
+- Después de 5 intentos fallidos se cierra la sesión de Google. "Olvidé mi PIN" también pide volver a iniciar sesión.
+
 ## Copias de seguridad y papelera
 
 - **Copias automáticas en la nube:** cada día, la primera vez que alguien abre la app, se guarda una copia completa. Se conservan las últimas 20.

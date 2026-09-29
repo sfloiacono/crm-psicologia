@@ -185,11 +185,12 @@ function fbCol(){
     onSnapshot:(next,err)=>FB.fns.onSnapshot(FB.datos(),snap=>next({docs:snap.docs,docChanges:()=>snap.docChanges()}),err)
   };
 }
+const LOGO_SVG=`<svg class="logo" viewBox="0 0 96 96" width="72" height="72" role="img" aria-label="Consultorio Psiconflor"><rect width="96" height="96" rx="22" fill="#F6DDE3"/><rect x="18" y="20" width="60" height="58" rx="9" fill="#FFFEFD"/><path d="M18 29a9 9 0 0 1 9-9h42a9 9 0 0 1 9 9v6H18z" fill="#557F66"/><ellipse cx="48" cy="57" rx="8.5" ry="14" fill="#557F66"/><path d="M48 45v27" stroke="#FFFEFD" stroke-width="2" stroke-linecap="round"/></svg>`;
 function gate(state,info){
   let g=document.getElementById('gate');
   if(!g){g=document.createElement('div');g.id='gate';g.className='gate';document.body.appendChild(g)}
   if(state===null){g.remove();return}
-  const logo='<img src="icons/icon-192.png" alt="" width="72" height="72">';
+  const logo=LOGO_SVG;
   const body={
     cargando:`<p class="muted">Conectando…</p>`,
     login:`<p>Ingresá con tu cuenta de Google para ver la agenda y los datos del consultorio.</p>
@@ -521,6 +522,7 @@ function waLink(s){
   return `https://wa.me/${t}?text=${encodeURIComponent(msg)}`;
 }
 function checkOverdue(force){
+  if(LOCK.on) return;
   const list=overdueList();const d=document.getElementById('alerta');
   if(!list.length){if(d.open)d.close();return}
   let seen={};try{seen=JSON.parse(localStorage.getItem(LK_ALERTA)||'{}')}catch(e){}
@@ -544,6 +546,113 @@ function renderAlerta(list){
         <button class="btn ghost sm" data-a="al-goto" data-id="${esc(s.id)}">Ver en la agenda</button></div></li>`}).join('')}</ul></div>
     <div class="dlg-foot"><span class="small muted">Podés cambiar la cantidad de días en Configuración.</span><button class="btn" data-a="alerta-close">Cerrar</button></div>`;
   if(!d.open)d.showModal();
+}
+
+/* ============ PIN y bloqueo por inactividad ============ */
+const pinKey=()=>'psiconflor-pin:'+(Store.email||'local');
+const LK_PIN_SUG='psiconflor-pin-sugerido';
+function pinCfg(){try{return JSON.parse(localStorage.getItem(pinKey())||'null')}catch(e){return null}}
+function pinSave(c){try{if(c)localStorage.setItem(pinKey(),JSON.stringify(c));else localStorage.removeItem(pinKey())}catch(e){toast('No se pudo guardar el PIN en este dispositivo.')}}
+async function pinHash(pin,salt){
+  const enc=new TextEncoder();
+  const key=await crypto.subtle.importKey('raw',enc.encode(pin),'PBKDF2',false,['deriveBits']);
+  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:enc.encode(salt),iterations:150000,hash:'SHA-256'},key,256);
+  return [...new Uint8Array(bits)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+const LOCK={on:false,flow:null,buf:'',fails:0,last:Date.now(),hiddenAt:0,waitUntil:0};
+function closeAllLayers(){
+  for(const id of ['dlg','viewer','alerta','confirm']){const d=document.getElementById(id);if(d?.open)d.close()}
+  if(!pop().hidden)closePop();closeOffer();
+}
+function pinScreen(){
+  let el=document.getElementById('lock');
+  if(!el){el=document.createElement('div');el.id='lock';el.className='pinlock';el.setAttribute('role','dialog');el.setAttribute('aria-modal','true');document.body.appendChild(el)}
+  const f=LOCK.flow;
+  const titles={unlock:'Ingresá tu PIN',verify:'Ingresá tu PIN actual',set1:'Elegí un PIN de 4 dígitos',set2:'Repetí el PIN'};
+  const subs={unlock:Store.email?esc(Store.email):'Consultorio Psiconflor',verify:'Para continuar, confirmá que sos vos.',set1:'Lo vas a usar para abrir la app en este dispositivo.',set2:'Para confirmar que lo escribiste bien.'};
+  const dots=[0,1,2,3].map(i=>`<span class="${i<LOCK.buf.length?'on':''}"></span>`).join('');
+  const keys=['1','2','3','4','5','6','7','8','9','','0','del'].map(k=>k===''?'<span></span>':`<button class="pkey${k==='del'?' del':''}" data-a="pin-key" data-k="${k}" aria-label="${k==='del'?'Borrar':k}">${k==='del'?'⌫':k}</button>`).join('');
+  const waiting=LOCK.waitUntil>Date.now();
+  el.innerHTML=`<div class="lock-card">${LOGO_SVG.replace('width="72" height="72"','width="60" height="60"')}
+    <h2>${titles[f.mode]}</h2><p class="muted small">${subs[f.mode]}</p>
+    <div class="pin-dots" aria-live="polite" aria-label="${LOCK.buf.length} de 4 dígitos">${dots}</div>
+    <p class="pin-err" role="alert">${esc(f.err||'')}</p>
+    <div class="keypad${waiting?' disabled':''}">${keys}</div>
+    <div class="lock-foot">${f.mode==='unlock'?'<button class="btn ghost sm" data-a="pin-forgot">Olvidé mi PIN</button>':'<button class="btn ghost sm" data-a="pin-cancel">Cancelar</button>'}</div></div>`;
+  el.hidden=false;
+}
+function startPinFlow(mode,onDone){closeAllLayers();LOCK.flow={mode,onDone,err:''};LOCK.buf='';pinScreen()}
+function hideLock(){const el=document.getElementById('lock');if(el)el.hidden=true;LOCK.flow=null;LOCK.buf=''}
+function lockNow(){
+  if(!pinCfg()||LOCK.on) return;
+  LOCK.on=true;startPinFlow('unlock',()=>{LOCK.on=false;LOCK.fails=0;LOCK.last=Date.now();hideLock();render()});
+}
+async function pinDigit(k){
+  const f=LOCK.flow;if(!f)return;
+  if(LOCK.waitUntil>Date.now()){f.err=`Esperá ${Math.ceil((LOCK.waitUntil-Date.now())/1000)} segundos.`;pinScreen();return}
+  if(k==='del'){LOCK.buf=LOCK.buf.slice(0,-1);f.err='';pinScreen();return}
+  if(LOCK.buf.length>=4)return;
+  LOCK.buf+=k;f.err='';pinScreen();
+  if(LOCK.buf.length<4)return;
+  const pin=LOCK.buf;await sleep(120);
+  if(f.mode==='unlock'||f.mode==='verify'){
+    const c=pinCfg();const ok=c&&(await pinHash(pin,c.salt))===c.hash;
+    if(ok){LOCK.buf='';f.onDone();return}
+    LOCK.fails++;LOCK.buf='';
+    if(LOCK.fails>=5){
+      if(Store.fb){pinSave(null);f.err='Demasiados intentos. Por seguridad, cerramos la sesión.';pinScreen();await sleep(1600);doLogout();return}
+      LOCK.waitUntil=Date.now()+30000;LOCK.fails=0;f.err='Demasiados intentos. Esperá 30 segundos.';
+    } else f.err=`PIN incorrecto. ${5-LOCK.fails===1?'Te queda 1 intento':`Te quedan ${5-LOCK.fails} intentos`}.`;
+    pinScreen();return;
+  }
+  if(f.mode==='set1'){LOCK.flow={...f,mode:'set2',first:pin,err:''};LOCK.buf='';pinScreen();return}
+  if(f.mode==='set2'){
+    if(pin!==f.first){LOCK.flow={...f,mode:'set1',first:'',err:'Los PIN no coinciden. Probá de nuevo.'};LOCK.buf='';pinScreen();return}
+    const salt=uid()+uid();const old=pinCfg();
+    pinSave({salt,hash:await pinHash(pin,salt),min:old?.min||5,alSalir:old?.alSalir??true});
+    LOCK.buf='';f.onDone();
+  }
+}
+async function pinForgot(){
+  const msg=Store.fb?'Para crear un PIN nuevo, tenés que volver a iniciar sesión con tu cuenta de Google. Tus datos no se pierden.':'Se borra el PIN de este dispositivo.';
+  const el=document.getElementById('lock');el.hidden=true;
+  const ok=await confirmBox('Olvidé mi PIN',msg,Store.fb?'Iniciar sesión de nuevo':'Borrar PIN',false);
+  if(!ok){el.hidden=false;return}
+  pinSave(null);
+  if(Store.fb){doLogout();return}
+  LOCK.on=false;hideLock();render();toast('PIN eliminado');
+}
+function pinActivity(){LOCK.last=Date.now()}
+function pinTick(){
+  const c=pinCfg();if(!c||LOCK.on)return;
+  if(Date.now()-LOCK.last>=(Number(c.min)||5)*60000) lockNow();
+}
+function pinInit(){
+  ['pointerdown','keydown','wheel','touchstart'].forEach(ev=>document.addEventListener(ev,pinActivity,{passive:true,capture:true}));
+  document.addEventListener('visibilitychange',()=>{
+    const c=pinCfg();if(!c)return;
+    if(document.visibilityState==='hidden'){LOCK.hiddenAt=Date.now();if(c.alSalir)lockNow()}
+    else pinTick();
+  });
+  setInterval(pinTick,15000);
+  if(pinCfg()) lockNow();
+}
+function pinPanel(){
+  const c=pinCfg();
+  const mins=[1,3,5,10,15,30];
+  return `<section class="panel" style="margin-top:16px"><div class="panel-head"><div><h2>Seguridad de este dispositivo</h2>
+    <p class="small muted" style="margin-top:3px">El PIN se guarda solo en este dispositivo: cada computadora o celular tiene el suyo. Evita que alguien que tome el dispositivo vea la agenda.</p></div></div>
+    <div class="panel-body">${c?`<div class="form cols3">
+      <div class="field"><label>PIN</label><p class="ok-txt" style="margin:6px 0 0">Activado</p></div>
+      <div class="field"><label for="pinMin">Bloquear después de</label><select class="select" id="pinMin" data-c="pin-min">${mins.map(m=>`<option value="${m}"${Number(c.min)===m?' selected':''}>${m} ${m===1?'minuto':'minutos'} sin uso</option>`).join('')}</select></div>
+      <div class="field"><label>Al salir de la app</label><label class="check"><input type="checkbox" data-c="pin-salir" ${c.alSalir?'checked':''}>Bloquear apenas cambio de app o de pestaña</label></div>
+      </div><div class="btn-group" style="margin-top:12px"><button class="btn" data-a="pin-lock">Bloquear ahora</button><button class="btn" data-a="pin-change">Cambiar PIN</button><button class="btn danger" data-a="pin-off">Desactivar PIN</button></div>`
+    :`<p class="muted" style="margin-bottom:12px">Todavía no hay un PIN en este dispositivo.</p><button class="btn primary" data-a="pin-on">Activar PIN</button>`}</div></section>`;
+}
+function pinSuggest(){
+  if(pinCfg())return '';
+  try{if(localStorage.getItem(LK_PIN_SUG))return ''}catch(e){}
+  return `<div class="notice">${ICONS.info}<p style="flex:1">Protegé este dispositivo con un PIN de 4 dígitos, así nadie más puede abrir la agenda.</p><button class="btn sm" data-a="pin-on">Activar PIN</button><button class="btn ghost sm" data-a="pin-sug-no">Ahora no</button></div>`;
 }
 
 function sessionsInRange(from,to){
@@ -690,6 +799,7 @@ function viewAgenda(){
     <button class="btn icon" data-a="ag-nav" data-n="-1" aria-label="Anterior">‹</button><button class="btn" data-a="ag-nav" data-n="0">Hoy</button><button class="btn icon" data-a="ag-nav" data-n="1" aria-label="Siguiente">›</button>
     <button class="btn${panelOpen?' on':''}" data-a="panel-toggle" aria-expanded="${panelOpen}">Pendientes${pendCount?` <em class="count">${pendCount}</em>`:''}</button></div></div>
     ${(()=>{const o=overdueList();return o.length?`<div class="notice warn">${ICONS.info}<p style="flex:1">${o.length===1?'Hay 1 pago pendiente':`Hay ${o.length} pagos pendientes`} hace más de ${alertaDias()} días.</p><button class="btn sm" data-a="alerta-open">Ver</button></div>`:''})()}
+    ${pinSuggest()}
     ${downloadNotice()}
     ${S.patients.length?'':`<div class="notice">${ICONS.info}<p>Todavía no cargaste pacientes. Creá uno en Pacientes con su horario y la agenda se completa sola.</p></div>`}
     <div class="ag-layout${panelOpen?' with-panel':''}">
@@ -1225,6 +1335,7 @@ function viewConfig(){
     </div></section>`).join('');
   return `<div class="view-head"><div><h1>Configuración</h1><p class="sub">Los cambios se guardan automáticamente.</p></div></div>
     ${lookPanel(g)}
+    ${pinPanel()}
     <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>General</h2></div><div class="panel-body"><div class="form cols3">
       <div class="field full"><label for="c_prof">Nombre del profesional o consultorio</label><input class="input" id="c_prof" data-c="gen" data-k="profesional" value="${esc(g.profesional)}" placeholder="Ej.: Lic. Nombre Apellido"></div>
       <div class="field"><label for="c_ini">La agenda empieza a las</label><select class="select" id="c_ini" data-c="gen" data-k="inicio" data-num="1">${hourOpts(g.inicio)}</select></div>
@@ -1399,6 +1510,7 @@ let suppressClick=false;
 document.addEventListener('click',async ev=>{
   if(suppressClick){suppressClick=false;ev.preventDefault();return}
   if(ev.target.closest('select,textarea,input')) return;
+  if(LOCK.flow&&!ev.target.closest('#lock')&&!ev.target.closest('#confirm')) return;
   const a=ev.target.closest('[data-a]');
   if(!pop().hidden&&!ev.target.closest('#pop,dialog,#offer')){closePop();if(!a||!['open-ses','set-pago','ses-done','goto-ses','ses-pay','comp-add','comp-view'].includes(a.dataset.a))return}
   if(!a) return;
@@ -1423,6 +1535,14 @@ document.addEventListener('click',async ev=>{
     case 'al-snooze':{const s=S.visible[a.dataset.id]||findSession(a.dataset.id);if(!s)break;saveSession({...s,alertaHasta:addDays(TODAY,3)});render();renderAlerta();toast('Te vuelvo a avisar en 3 días');break}
     case 'al-goto':{const s=S.visible[a.dataset.id]||findSession(a.dataset.id);document.getElementById('alerta').close();if(!s)break;S.view='agenda';S.cursor=s.fecha;render();focusSession(s.id);break}
     case 'alerta-open': checkOverdue(true);break;
+    case 'pin-key': pinDigit(a.dataset.k);break;
+    case 'pin-forgot': pinForgot();break;
+    case 'pin-cancel': hideLock();break;
+    case 'pin-on': startPinFlow('set1',()=>{hideLock();try{localStorage.setItem(LK_PIN_SUG,'1')}catch(e){}render();toast('PIN activado en este dispositivo')});break;
+    case 'pin-change': startPinFlow('verify',()=>{LOCK.flow={mode:'set1',onDone:()=>{hideLock();render();toast('PIN cambiado')},err:''};LOCK.buf='';pinScreen()});break;
+    case 'pin-off': startPinFlow('verify',()=>{pinSave(null);hideLock();render();toast('PIN desactivado en este dispositivo')});break;
+    case 'pin-lock': lockNow();break;
+    case 'pin-sug-no':{try{localStorage.setItem(LK_PIN_SUG,'1')}catch(e){}render();break}
     case 'caja-view': S.cajaV=a.dataset.v;render();break;
     case 'caja-nav':{const n=Number(a.dataset.n);const c=S.cajaCur||TODAY;
       S.cajaCur=!n?TODAY:S.cajaV==='dia'?addDays(c,n):S.cajaV==='semana'?addDays(c,7*n):addMonths(monthKey(c),n)+'-01';render();break}
@@ -1566,6 +1686,7 @@ document.addEventListener('change',async ev=>{
   if(c==='pop-field'){const s=S.visible[S.popId]||findSession(S.popId);if(!s)return;const saved=saveSession({...s,[el.dataset.f]:el.value});render();S.visible[saved.id]=saved;renderPop();renderNav();return}
   if(c==='ses-field'){const s=S.visible[el.dataset.id];if(!s||!el.value)return;saveSession({...s,[el.dataset.f]:el.value});render();toast('Sesión actualizada')}
   else if(c==='pac-f'){S.filtroEstado=el.value;render()}
+  else if(c==='pin-min'||c==='pin-salir'){const p=pinCfg();if(p){if(c==='pin-min')p.min=Number(el.value);else p.alSalir=el.checked;pinSave(p);toast('Guardado')}}
   else if(c==='gen'){const k=el.dataset.k;S.config.general[k]=el.type==='checkbox'?el.checked:el.dataset.num?Number(el.value):el.value.trim();saveConfig();renderNav();applyLook()}
   else if(c==='cfg'){
     const i=item(el.dataset.list,el.dataset.id);if(!i)return;const k=el.dataset.k;
@@ -1596,6 +1717,7 @@ document.addEventListener('input',ev=>{
 document.addEventListener('focusout',ev=>{const el=ev.target;if(el.dataset?.note&&noteTimers[el.dataset.note]){clearTimeout(noteTimers[el.dataset.note]);saveNote(el.dataset.note,el.value.trim())}});
 window.addEventListener('resize',()=>{if(!pop().hidden)positionPop()});
 document.addEventListener('keydown',ev=>{
+  if(LOCK.flow){if(/^[0-9]$/.test(ev.key)){ev.preventDefault();pinDigit(ev.key)}else if(ev.key==='Backspace'){ev.preventDefault();pinDigit('del')}else if(ev.key==='Escape'&&LOCK.flow.mode!=='unlock'){hideLock()}return}
   const el=ev.target;
   if(ev.key==='Escape'&&!pop().hidden&&!dlg.open){closePop();return}
   if(ev.key==='Enter'&&el.dataset?.enter==='cfg-add'){ev.preventDefault();document.querySelector(`[data-a="cfg-add"][data-list="${el.dataset.list}"]`)?.click()}
@@ -1661,6 +1783,7 @@ document.addEventListener('pointerup',async ()=>{
   S.ag=S.config.general.vistaInicial||(window.innerWidth<760?'dia':'semana');
   if(window.innerWidth<760&&S.ag==='semana') S.ag='dia';
   S.ready=true;render();
+  pinInit();
   setInterval(()=>{const f=document.activeElement;if(!S.dlgOpen&&!drag&&pop().hidden&&!(f&&f.dataset?.note)&&S.view==='agenda'&&document.visibilityState==='visible')render()},5*60*1000);
 })();
 
