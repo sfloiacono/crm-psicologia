@@ -12,6 +12,8 @@ Aplicación web para organizar un consultorio de psicología: agenda, registro d
 - **Caja**: cobrado, pendiente, porcentaje para instituciones, gastos y neto, por día, por semana o por mes.
 - **Pacientes**: ficha completa, historial de horarios y comprobantes de pago (imagen o PDF).
 - **Gastos**: egresos del consultorio por categoría.
+- **Feriados de Argentina**: calendario oficial cargado (2026), con feriados propios agregables. Las sesiones en feriados nacionales se marcan solas como "Feriado" (configurable).
+- **Tablas ordenables**: tocando el título de una columna se ordena de menor a mayor o de mayor a menor.
 - **Aviso de pagos atrasados**: una ventana emergente avisa cuando un pago lleva más de 7 días pendiente (el plazo se cambia en Configuración), con acceso a marcarlo como pagado o a recordarle al paciente por WhatsApp.
 - **Configuración**: todas las listas desplegables son editables, y se puede elegir la paleta de colores y la tipografía.
 

@@ -485,8 +485,8 @@ function backupPanel(){
   return `<section class="panel" style="margin-top:16px"><div class="panel-head"><div><h2>Copias de seguridad</h2>
       <p class="small muted" style="margin-top:3px">La app guarda una copia automática en la nube cada día, apenas alguien la abre, y conserva las últimas ${BK_MAX}. También se guarda una antes de borrar o restaurar datos.</p></div>
       <button class="btn" data-a="bk-now">Hacer una copia ahora</button></div>
-    ${rs.length?`<div class="scroll"><table><thead><tr><th>Fecha</th><th>Motivo</th><th>Hecha por</th><th class="num">Pacientes</th><th></th></tr></thead><tbody>
-      ${rs.map(r=>`<tr><td>${fmtFechaHora(r.fecha)}</td><td>${esc(r.motivo)}</td><td class="small">${esc(r.por)}</td><td class="num">${r.pacientes??'—'}</td><td class="num"><button class="btn sm" data-a="bk-restore" data-id="${esc(r.id)}">Restaurar</button></td></tr>`).join('')}
+    ${rs.length?`<div class="scroll"><table data-sort="respaldos"><thead><tr><th>Fecha</th><th>Motivo</th><th>Hecha por</th><th class="num">Pacientes</th><th></th></tr></thead><tbody>
+      ${rs.map(r=>`<tr><td data-v="${esc(r.fecha)}">${fmtFechaHora(r.fecha)}</td><td>${esc(r.motivo)}</td><td class="small">${esc(r.por)}</td><td class="num">${r.pacientes??'—'}</td><td class="num"><button class="btn sm" data-a="bk-restore" data-id="${esc(r.id)}">Restaurar</button></td></tr>`).join('')}
     </tbody></table></div>`:'<p class="panel-body muted">Todavía no hay copias. La primera se hace automáticamente.</p>'}
     <div class="panel-body"><p class="small muted">${lastDownload()?`Última copia descargada a este dispositivo: ${fmtShort(lastDownload())}.`:'Todavía no descargaste copias a este dispositivo.'} Una vez por mes, conviene descargar una y guardarla en tu Google Drive o en un pendrive. Los archivos de los comprobantes no se incluyen en la descarga.</p></div></section>`;
 }
@@ -655,6 +655,73 @@ function pinSuggest(){
   return `<div class="notice">${ICONS.info}<p style="flex:1">Protegé este dispositivo con un PIN de 4 dígitos, así nadie más puede abrir la agenda.</p><button class="btn sm" data-a="pin-on">Activar PIN</button><button class="btn ghost sm" data-a="pin-sug-no">Ahora no</button></div>`;
 }
 
+/* ============ Feriados de Argentina ============ */
+// Fuente: calendario oficial 2026 (Ley 27.399, Decreto 614/2025 y Resolución 164/2025 de Jefatura de Gabinete).
+// tipo 'feriado' = feriado nacional; 'turistico' = día no laborable con fines turísticos.
+const FERIADOS_AR={
+  '2026-01-01':['Año Nuevo','feriado'],
+  '2026-02-16':['Carnaval','feriado'],
+  '2026-02-17':['Carnaval','feriado'],
+  '2026-03-23':['Día no laborable con fines turísticos','turistico'],
+  '2026-03-24':['Día Nacional de la Memoria por la Verdad y la Justicia','feriado'],
+  '2026-04-02':['Día del Veterano y de los Caídos en la Guerra de Malvinas','feriado'],
+  '2026-04-03':['Viernes Santo','feriado'],
+  '2026-05-01':['Día del Trabajador','feriado'],
+  '2026-05-25':['Día de la Revolución de Mayo','feriado'],
+  '2026-06-15':['Paso a la Inmortalidad del General Martín Miguel de Güemes','feriado'],
+  '2026-06-20':['Paso a la Inmortalidad del General Manuel Belgrano','feriado'],
+  '2026-07-09':['Día de la Independencia','feriado'],
+  '2026-07-10':['Día no laborable con fines turísticos','turistico'],
+  '2026-08-17':['Paso a la Inmortalidad del General José de San Martín','feriado'],
+  '2026-10-12':['Día del Respeto a la Diversidad Cultural','feriado'],
+  '2026-11-23':['Día de la Soberanía Nacional','feriado'],
+  '2026-12-07':['Día no laborable con fines turísticos','turistico'],
+  '2026-12-08':['Inmaculada Concepción de María','feriado'],
+  '2026-12-25':['Navidad','feriado']
+};
+const FER_TIPOS={feriado:'Feriado',turistico:'No laborable (turístico)'};
+function feriadoDe(fecha){
+  const g=S.config?.general||{};
+  const extra=(g.feriadosExtra||[]).find(f=>f.fecha===fecha);
+  if(extra) return {nombre:extra.nombre,tipo:extra.tipo||'feriado',propio:true};
+  if((g.feriadosQuitados||[]).includes(fecha)) return null;
+  const f=FERIADOS_AR[fecha];return f?{nombre:f[0],tipo:f[1]}:null;
+}
+function feriadoAuto(fecha){
+  const f=feriadoDe(fecha);if(!f)return false;
+  const modo=S.config?.general?.feriadosAuto||'nacionales';
+  return modo==='todos'||(modo==='nacionales'&&f.tipo==='feriado');
+}
+function ferTag(fecha,corto){
+  const f=feriadoDe(fecha);if(!f)return '';
+  return `<span class="fer ${f.tipo}" title="${esc(f.nombre)}">${corto?(f.tipo==='feriado'?'Feriado':'No laborable'):esc(f.nombre)}</span>`;
+}
+function feriadosPanel(){
+  const g=S.config.general;const y=S.ferYear||Number(TODAY.slice(0,4));
+  const lista=[];
+  for(const [fecha,[nombre,tipo]] of Object.entries(FERIADOS_AR)) if(fecha.startsWith(y+'-')) lista.push({fecha,nombre,tipo,quitado:(g.feriadosQuitados||[]).includes(fecha)});
+  for(const f of (g.feriadosExtra||[])) if(f.fecha.startsWith(y+'-')) lista.push({...f,propio:true});
+  lista.sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const hayOficial=Object.keys(FERIADOS_AR).some(f=>f.startsWith(y+'-'));
+  const modo=g.feriadosAuto||'nacionales';
+  return `<section class="panel" style="margin-top:16px"><div class="panel-head"><div><h2>Feriados</h2>
+    <p class="small muted" style="margin-top:3px">Calendario oficial de Argentina. Podés agregar feriados provinciales o municipales, o quitar los que no apliquen a tu consultorio.</p></div>
+    <div class="btn-group"><button class="btn icon" data-a="fer-year" data-n="-1" aria-label="Año anterior">‹</button><span class="fer-year">${y}</span><button class="btn icon" data-a="fer-year" data-n="1" aria-label="Año siguiente">›</button></div></div>
+    <div class="panel-body"><div class="field" style="max-width:520px"><label for="ferAuto">Sesiones que caen en un feriado</label>
+      <select class="select" id="ferAuto" data-c="gen" data-k="feriadosAuto">
+        <option value="nacionales"${modo==='nacionales'?' selected':''}>Marcar como "Feriado" en feriados nacionales; en no laborables, solo avisar</option>
+        <option value="todos"${modo==='todos'?' selected':''}>Marcar como "Feriado" en feriados y en no laborables</option>
+        <option value="ninguno"${modo==='ninguno'?' selected':''}>Solo avisar: decido yo en cada caso</option>
+      </select><p class="hint">Las sesiones marcadas como "Feriado" no se cobran ni quedan para registrar. Si atendés ese día, cambiale el estado a "Realizada".</p></div></div>
+    ${!hayOficial?`<p class="panel-body muted" style="padding-top:0">El calendario oficial de ${y} todavía no está cargado en la app. Cuando el Gobierno lo publique, pedile a Claude que lo agregue. Mientras tanto, podés sumar feriados abajo.</p>`:''}
+    ${lista.length?`<div class="scroll"><table data-sort="feriados"><thead><tr><th>Fecha</th><th>Motivo</th><th>Tipo</th><th data-nosort></th></tr></thead><tbody>
+      ${lista.map(f=>`<tr class="${f.quitado?'fer-off':''}"><td data-v="${f.fecha}">${DIAS_C[dow(f.fecha)-1]} ${fmtShort(f.fecha)}</td><td>${esc(f.nombre)}${f.propio?' <span class="chip sm">Agregado</span>':''}</td><td>${FER_TIPOS[f.tipo]||''}</td>
+      <td class="num">${f.propio?`<button class="btn danger sm" data-a="fer-del" data-f="${f.fecha}">Eliminar</button>`:f.quitado?`<button class="btn sm" data-a="fer-back" data-f="${f.fecha}">Volver a incluir</button>`:`<button class="btn ghost sm" data-a="fer-off" data-f="${f.fecha}">Quitar</button>`}</td></tr>`).join('')}
+    </tbody></table></div>`:''}
+    <div class="panel-body"><div class="toolbar"><input class="input" type="date" id="ferFecha" aria-label="Fecha del feriado"><input class="input" id="ferNombre" placeholder="Motivo, por ejemplo: feriado provincial" style="flex:1;min-width:200px" aria-label="Motivo">
+      <select class="select" id="ferTipo" aria-label="Tipo"><option value="feriado">Feriado</option><option value="turistico">No laborable</option></select><button class="btn" data-a="fer-add">Agregar</button></div></div></section>`;
+}
+
 function sessionsInRange(from,to){
   const out=new Map();
   for(const m of monthsBetween(from,to)){
@@ -674,7 +741,7 @@ function sessionsInRange(from,to){
         const diff=Math.round(daysBetween(mondayOf(h.ancla||h.desde||d),mondayOf(d))/7);
         if(((diff%sem)+sem)%sem!==0) continue;
         const id=`${p.id}_${d}_${h.hora.replace(':','')}`;
-        if(!out.has(id)) out.set(id,{id,pid:p.id,fecha:d,hora:h.hora,dur:Number(h.duracion||defDur()),estado:'programada',pago:'pendiente',virtual:true});
+        if(!out.has(id)) out.set(id,{id,pid:p.id,fecha:d,hora:h.hora,dur:Number(h.duracion||defDur()),estado:(feriadoAuto(d)&&item('estadosSesion','feriado'))?'feriado':'programada',pago:'pendiente',virtual:true});
       }
     }
   }
@@ -750,6 +817,39 @@ function applyLook(){
   r.dataset.palette=g.paleta||'rosa-salvia';r.dataset.font=g.fuente||'serena';
   if(g.textura!==false) r.dataset.textura='papel'; else delete r.dataset.textura;
 }
+/* ---- Orden de columnas ---- */
+S.sort={};
+function cellVal(td){
+  if(!td) return null;
+  const dv=td.dataset.v;
+  if(dv!=null){const n=Number(dv);return isNaN(n)||/^\d{4}-/.test(dv)?dv:n}
+  const t=td.textContent.replace(/\s+/g,' ').trim();
+  if(!t||t==='—') return null;
+  const m=t.replace(/\s/g,'').match(/^([−-])?\$?([\d.]+)(?:,(\d+))?(%|días)?/);
+  if(m&&/^[−-]?\$?\d/.test(t.replace(/\s/g,''))){const n=Number(m[2].replace(/\./g,'')+(m[3]?'.'+m[3]:''));return m[1]?-n:n}
+  return t.toLowerCase();
+}
+function applySorts(){
+  document.querySelectorAll('#main table[data-sort]').forEach(t=>{
+    const key=t.dataset.sort;const head=t.tHead?.rows[0];if(!head)return;
+    const st=S.sort[key];
+    [...head.cells].forEach((th,i)=>{
+      if(th.hasAttribute('data-nosort')||!th.textContent.trim())return;
+      const dir=st&&st.i===i?st.dir:0;
+      th.setAttribute('aria-sort',dir===1?'ascending':dir===-1?'descending':'none');
+      th.innerHTML=`<button class="thsort" data-a="sort" data-t="${key}" data-i="${i}" title="Ordenar">${th.innerHTML}<span class="arr" aria-hidden="true">${dir===1?'▲':dir===-1?'▼':'↕'}</span></button>`;
+    });
+    if(!st)return;
+    const tb=t.tBodies[0];if(!tb)return;
+    const rows=[...tb.rows];if(rows.length<2)return;
+    rows.sort((a,b)=>{
+      const x=cellVal(a.cells[st.i]),y=cellVal(b.cells[st.i]);
+      if(x==null&&y==null)return 0;if(x==null)return 1;if(y==null)return -1;
+      return (typeof x==='number'&&typeof y==='number'?x-y:String(x).localeCompare(String(y),'es',{numeric:true}))*st.dir;
+    });
+    rows.forEach(r=>tb.appendChild(r));
+  });
+}
 function render(){
   if(!S.ready) return;
   applyLook();
@@ -759,6 +859,7 @@ function render(){
   S.visible={};
   m.innerHTML=({agenda:viewAgenda,semanas:viewSemanas,caja:viewCaja,pacientes:viewPacientes,gastos:viewGastos,config:viewConfig}[S.view])();
   if(S.view==='agenda'&&S.ag!=='mes') scrollCalToNow();
+  applySorts();
 }
 
 /* ---- Agenda ---- */
@@ -907,12 +1008,12 @@ function timeGrid(dates,all,detail){
   const px=detail?PXD:PX;
   const [ini,fin]=gridBounds(all);const H=(fin-ini)*60*px;const n=dates.length;
   const split=monthKey(dates[0])!==monthKey(dates[n-1]);
-  const head=dates.map(d=>`<button class="ch${d===TODAY?' today':''}" data-a="goto-day" data-d="${d}" aria-label="${fmtLong(d)}"><span>${DIAS_C[dow(d)-1]}</span><b>${dayNum(d)}</b>${split||detail?`<small>${MESES_C[parse(d).getMonth()]}</small>`:''}</button>`).join('');
+  const head=dates.map(d=>`<button class="ch${d===TODAY?' today':''}${feriadoDe(d)?' is-fer':''}" data-a="goto-day" data-d="${d}" aria-label="${fmtLong(d)}${feriadoDe(d)?', '+esc(feriadoDe(d).nombre):''}"><span class="chd"><span>${DIAS_C[dow(d)-1]}</span><b>${dayNum(d)}</b>${split||detail?`<small>${MESES_C[parse(d).getMonth()]}</small>`:''}</span>${ferTag(d,!detail)}</button>`).join('');
   let gut='';for(let h=ini+1;h<fin;h++) gut+=`<span style="top:${(h-ini)*60*px}px">${pad(h)}:00</span>`;
   const cols=dates.map(d=>{
     const ss=all.filter(s=>s.fecha===d);
     let now='';if(d===TODAY){const m=toMin(nowHM());if(m>=ini*60&&m<=fin*60)now=`<div class="nowline" style="top:${(m-ini*60)*px}px"></div>`}
-    return `<div class="tcol${d===TODAY?' today':''}" data-a="grid-add" data-d="${d}" data-ini="${ini}" data-px="${px}" style="height:${H}px;--hh:${60*px}px">${layoutDay(ss,ini).map(it=>blk(it,ini,detail,px)).join('')}${now}</div>`;
+    return `<div class="tcol${d===TODAY?' today':''}${feriadoDe(d)?' fer-col':''}" data-a="grid-add" data-d="${d}" data-ini="${ini}" data-px="${px}" style="height:${H}px;--hh:${60*px}px">${layoutDay(ss,ini).map(it=>blk(it,ini,detail,px)).join('')}${now}</div>`;
   }).join('');
   return `<div class="cal"><div class="cal-scroll${detail?' tall':''}" id="calScroll"><div class="cal-inner${detail?' single':''}" style="--n:${n}">
     <div class="cal-head"><div class="corner"></div>${head}</div>
@@ -933,7 +1034,7 @@ function monthGrid(from,to,all){
     const items=ss.slice(0,4).map(s=>{S.visible[s.id]=s;const p=pat(s.pid);const pg=item('estadosPago',s.pago),e=item('estadosSesion',s.estado);
       const mark=pg?.tipo==='cobrado'?'<span class="mk ok" title="Pagada">$</span>':(cobraOf(s)&&pg?.tipo==='pendiente')?'<span class="mk debe" title="Debe">$</span>':'';
       return `<button class="mitem${modeOf(e)!=='si'&&s.estado!=='programada'?' off':''}${s.estado==='programada'&&isPast(s)?' um':''}" style="--c:${esc(colorOf('estadosSesion',s.estado))}" data-a="open-ses" data-id="${esc(s.id)}"><span class="dot"></span><span class="t">${esc(s.hora||'')}</span><span class="n">${esc(fullName(p)||'')}</span>${mark}</button>`}).join('');
-    h+=`<div class="mc${out?' out':''}${d===TODAY?' today':''}"><button class="mnum" data-a="goto-day" data-d="${d}" aria-label="${fmtLong(d)}">${dayNum(d)}</button>${out?'':items}${!out&&ss.length>4?`<button class="more" data-a="goto-day" data-d="${d}">${ss.length-4} más</button>`:''}</div>`;
+    h+=`<div class="mc${out?' out':''}${d===TODAY?' today':''}${!out&&feriadoDe(d)?' fer-col':''}"><button class="mnum" data-a="goto-day" data-d="${d}" aria-label="${fmtLong(d)}">${dayNum(d)}</button>${out?'':ferTag(d,true)+items}${!out&&ss.length>4?`<button class="more" data-a="goto-day" data-d="${d}">${ss.length-4} más</button>`:''}</div>`;
     if(addDays(d,1)>to&&dow(d)===7) break;
   }
   return `<div class="month">${h}</div>`;
@@ -1054,7 +1155,7 @@ function wkCard(s){
     <div class="ses-meta">${esc(instOf(p)?.nombre||'')}${instOf(p)?', ':''}${money(montoOf(s))}</div>
     <div class="dual-row"><span class="dual-lbl">Sesión</span><select class="select sm" data-c="ses-field" data-f="estado" data-id="${esc(s.id)}" aria-label="Estado de la sesión">${estadoOpts(s)}</select></div>
     <div class="dual-row"><span class="dual-lbl">Pago</span>${payToggle(s)}</div>
-    <textarea class="input note-in" rows="2" placeholder="Nota" aria-label="Nota de la sesión" data-note="${esc(s.id)}">${esc(s.nota||'')}</textarea>
+    ${s.nota?`<button class="notechip" data-a="open-ses" data-id="${esc(s.id)}" title="${esc(s.nota)}"><span aria-hidden="true">✎</span> Tiene una nota</button>`:''}
   </article>`;
 }
 function viewSemanas(){
@@ -1066,7 +1167,7 @@ function viewSemanas(){
   const tbl=rows.map(r=>{const st=r.st;const split=monthKey(r.from)!==monthKey(addDays(r.from,6));
     const mot=Object.entries(st.motivos).map(([id,n])=>`<span class="chip sm"><span class="dot" style="--c:${esc(colorOf('estadosSesion',id))}"></span>${esc(item('estadosSesion',id)?.nombre||id)} ${n}</span>`).join(' ');
     return `<tr class="clickable${r.from===S.wkSel?' is-sel':''}" data-a="wk-sel" data-d="${r.from}">
-      <td><b>${wkLabel(r.from)}</b>${split?'<div class="small muted">Se reparte entre dos meses</div>':''}</td>
+      <td data-v="${r.from}"><b>${wkLabel(r.from)}</b>${split?'<div class="small muted">Se reparte entre dos meses</div>':''}</td>
       <td class="num">${st.total}</td><td class="num">${st.realizadas}</td>
       <td>${mot||'<span class="muted">—</span>'}</td>
       <td class="num">${st.pct==null?'—':st.pct+'%'}</td>
@@ -1077,13 +1178,13 @@ function viewSemanas(){
   for(let i=0;i<(showWE?7:5);i++){
     const d=addDays(sel.from,i);const ss=sel.ss.filter(s=>s.fecha===d);
     const other=monthKey(d)!==m;
-    days+=`<section class="wday${d===TODAY?' today':''}${other?' other':''}"><div class="wday-head"><div><span class="dname">${DIAS[i]}</span>${other?`<span class="mtag">${cap(monName(d))}</span>`:''}</div><span class="dnum">${dayNum(d)}</span></div>
+    days+=`<section class="wday${d===TODAY?' today':''}${other?' other':''}"><div class="wday-head"><div><span class="dname">${DIAS[i]}</span>${other?`<span class="mtag">${cap(monName(d))}</span>`:''}${ferTag(d,false)}</div><span class="dnum">${dayNum(d)}</span></div>
       <div class="wday-body">${ss.length?ss.map(wkCard).join(''):'<p class="empty-day">Sin sesiones</p>'}</div></section>`;
   }
   return `<div class="view-head"><div><h1>Semanas de ${MESES[Number(mm)-1]} ${y}</h1><p class="sub">Cada semana va de lunes a domingo, con sus fechas. Tocá una semana para ver su detalle.</p></div>
     <div class="btn-group"><button class="btn icon" data-a="wk-month" data-n="-1" aria-label="Mes anterior">‹</button><button class="btn" data-a="wk-month" data-n="0">Este mes</button><button class="btn icon" data-a="wk-month" data-n="1" aria-label="Mes siguiente">›</button></div></div>
     <div class="panel"><div class="panel-head"><h2>Sesiones por semana</h2></div><div class="panel-body chart wkchart">${wkChart(rows)}</div>
-    <div class="scroll"><table class="wk-table"><thead><tr><th>Semana</th><th class="num">Sesiones</th><th class="num">Realizadas</th><th>No realizadas</th><th class="num">% realizadas</th><th class="num">Sin registrar</th></tr></thead>
+    <div class="scroll"><table class="wk-table" data-sort="semanas"><thead><tr><th>Semana</th><th class="num">Sesiones</th><th class="num">Realizadas</th><th>No realizadas</th><th class="num">% realizadas</th><th class="num">Sin registrar</th></tr></thead>
     <tbody>${tbl}</tbody></table></div>
     <p class="hint panel-body" style="padding-top:8px">"% realizadas" se calcula sobre las sesiones ya registradas. Las semanas que se reparten entre dos meses muestran sus siete días completos.</p></div>
     <div class="wk-detail-head"><div><h2>Semana del ${wkLabel(sel.from)}</h2><p class="sub">${st.total} sesiones, ${st.realizadas} realizadas${st.sinRegistrar?`, ${st.sinRegistrar} sin registrar`:''}.</p></div>
@@ -1132,7 +1233,7 @@ function viewCaja(){
   if(S.cajaV==='dia') body=cajaDia(from,P);
   else if(S.cajaV==='semana') body=cajaSemana(from);
   else {const m=monthKey(from);body=cajaMesPacientes(P)+weekdayPanel(m,P.all)+yearChart(m.slice(0,4))}
-  return `<div class="view-head"><div><h1>Caja</h1><p class="sub">${cajaTitle(from,to)}${S.cajaV==='semana'?`, ${parse(from).getFullYear()}`:''}. Cada sesión cuenta en la fecha en que se atendió.</p></div>
+  return `<div class="view-head"><div><h1>Caja</h1><p class="sub">${cajaTitle(from,to)}${S.cajaV==='dia'&&feriadoDe(from)?` (${esc(feriadoDe(from).nombre)})`:''}${S.cajaV==='semana'?`, ${parse(from).getFullYear()}`:''}. Cada sesión cuenta en la fecha en que se atendió.</p></div>
     <div class="btn-group"><div class="seg" role="group" aria-label="Período">${seg}</div>
     <button class="btn icon" data-a="caja-nav" data-n="-1" aria-label="Anterior">‹</button><button class="btn" data-a="caja-nav" data-n="0">Hoy</button><button class="btn icon" data-a="caja-nav" data-n="1" aria-label="Siguiente">›</button></div></div>
     <div class="kpis">
@@ -1154,7 +1255,7 @@ function cajaDia(d,P){
       <td>${cuenta||s.estado==='programada'?`<span class="${cob?'ok-txt':cuenta?'warn-txt':'muted'}">${esc(cob?pg.nombre:cuenta?'Pendiente de pago':'—')}</span>`:'<span class="muted">No se cobra</span>'}</td>
       <td class="num">${cuenta||cob||s.estado==='programada'?money(montoOf(s)):'—'}</td><td class="num">${cob&&porcOf(s)?neg(montoOf(s)*porcOf(s)/100):'—'}</td></tr>`}).join('');
   const gs=S.gastos.filter(g=>g.fecha===d);
-  return `<div class="panel"><div class="panel-head"><h2>Sesiones del día</h2><button class="btn sm" data-a="caja-agenda" data-d="${d}">Ver en la agenda</button></div><div class="scroll"><table>
+  return `<div class="panel"><div class="panel-head"><h2>Sesiones del día</h2><button class="btn sm" data-a="caja-agenda" data-d="${d}">Ver en la agenda</button></div><div class="scroll"><table data-sort="caja-dia">
     <thead><tr><th>Hora</th><th>Paciente</th><th>Sesión</th><th>Pago</th><th class="num">Honorario</th><th class="num">Institución (−)</th></tr></thead>
     <tbody>${rows||'<tr><td colspan="6" class="muted">No hay sesiones este día.</td></tr>'}</tbody></table></div></div>
     <div class="panel"><div class="panel-head"><h2>Gastos del día</h2><button class="btn sm" data-a="nav" data-v="gastos">Cargar un gasto</button></div>
@@ -1166,11 +1267,11 @@ function cajaSemana(from){
     if(i>=5&&!P.all.length&&!P.gastos&&!S.config.general.finDeSemana) continue;
     days.push({d,P,n});T.ses+=P.all.length;T.cob+=P.st.cobrado;T.pend+=P.st.pendiente;T.inst+=P.st.inst;T.gas+=P.gastos;T.neto+=P.neto}
   const max=Math.max(1,...days.map(x=>Math.abs(x.P.neto)));
-  const rows=days.map(({d,P})=>`<tr class="clickable${d===TODAY?' is-sel':''}" data-a="caja-day" data-d="${d}"><td><b>${DIAS[dow(d)-1]}</b> <span class="muted">${fmtShort(d)}</span></td>
+  const rows=days.map(({d,P})=>`<tr class="clickable${d===TODAY?' is-sel':''}" data-a="caja-day" data-d="${d}"><td data-v="${d}"><b>${DIAS[dow(d)-1]}</b> <span class="muted">${fmtShort(d)}</span> ${ferTag(d,true)}</td>
     <td class="num">${P.all.length||'—'}</td><td class="num">${P.st.cobrado?money(P.st.cobrado):'—'}</td><td class="num">${P.st.pendiente?`<span class="warn-txt">${money(P.st.pendiente)}</span>`:'—'}</td>
     <td class="num">${neg(P.st.inst)}</td><td class="num">${neg(P.gastos)}</td>
     <td class="num netcell"><span class="nbar ${P.neto<0?'neg':''}" style="width:${Math.round(Math.abs(P.neto)/max*100)}%"></span><b>${money(P.neto)}</b></td></tr>`).join('');
-  return `<div class="panel"><div class="panel-head"><h2>Día por día</h2><span class="small muted">Tocá un día para ver su detalle</span></div><div class="scroll"><table>
+  return `<div class="panel"><div class="panel-head"><h2>Día por día</h2><span class="small muted">Tocá un día para ver su detalle</span></div><div class="scroll"><table data-sort="caja-semana">
     <thead><tr><th>Día</th><th class="num">Sesiones</th><th class="num">Cobrado</th><th class="num">Pendiente</th><th class="num">Instituciones (−)</th><th class="num">Gastos (−)</th><th class="num">Neto</th></tr></thead>
     <tbody>${rows}</tbody>
     <tfoot><tr><td>Total de la semana</td><td class="num">${T.ses}</td><td class="num">${money(T.cob)}</td><td class="num">${money(T.pend)}</td><td class="num">${neg(T.inst)}</td><td class="num">${neg(T.gas)}</td><td class="num">${money(T.neto)}</td></tr></tfoot>
@@ -1188,7 +1289,7 @@ function cajaMesPacientes(P){
       <td class="num">${money(r.cobrado)}</td><td class="num">${r.pendiente?`<span class="warn-txt">${money(r.pendiente)}</span>`:'—'}</td>
       <td class="num">${neg(r.inst)}</td><td>${esc(item('facturacion',p?.facturacion)?.nombre||'')}</td></tr>`;
   }).join('');
-  return `<div class="panel"><div class="panel-head"><h2>Por paciente</h2></div><div class="scroll"><table class="caja-table">
+  return `<div class="panel"><div class="panel-head"><h2>Por paciente</h2></div><div class="scroll"><table class="caja-table" data-sort="caja-mes">
       <thead><tr><th>Paciente</th><th>Sesiones del mes</th><th class="num">Realizadas</th><th class="num">Cobrado</th><th class="num">Pendiente</th><th class="num">Institución (−)</th><th>Facturación</th></tr></thead>
       <tbody>${rows||'<tr><td colspan="7" class="muted">No hay sesiones en este mes.</td></tr>'}</tbody>
       ${rows?`<tfoot><tr><td>Total</td><td>${st.total} sesiones, ${st.canceladas} sin realizar</td><td class="num">${st.realizadas}</td><td class="num">${money(st.cobrado)}</td><td class="num">${money(st.pendiente)}</td><td class="num">${neg(st.inst)}</td><td></td></tr></tfoot>`:''}
@@ -1210,8 +1311,8 @@ function weekdayPanel(m,all){
   const pacT=new Set(all.filter(s=>s.estado==='programada'||cobraOf(s)).map(s=>s.pid)).size;
   return `<div class="panel"><div class="panel-head"><div><h2>Por día de la semana</h2>
     <p class="small muted" style="margin-top:3px">Pacientes y sesiones que se atienden cada día, estén pagadas o no. Incluye las sesiones realizadas, las que se cobran aunque se hayan cancelado y las que todavía no ocurrieron.</p></div></div>
-    <div class="scroll"><table><thead><tr><th>Día</th><th>Fechas del mes</th><th class="num">Pacientes</th><th class="num">Sesiones</th><th class="num">Total a facturar</th><th class="num">Cobrado</th><th class="num">Falta cobrar</th><th class="num">No realizadas</th></tr></thead>
-    <tbody>${rows.map(r=>`<tr><td><b>${DIAS[r.wd-1]}</b></td><td class="small muted">${r.fechas.map(d=>dayNum(d)).join(', ')}</td>
+    <div class="scroll"><table data-sort="caja-dias"><thead><tr><th>Día</th><th data-nosort>Fechas del mes</th><th class="num">Pacientes</th><th class="num">Sesiones</th><th class="num">Total a facturar</th><th class="num">Cobrado</th><th class="num">Falta cobrar</th><th class="num">No realizadas</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td data-v="${r.wd}"><b>${DIAS[r.wd-1]}</b></td><td class="small muted">${r.fechas.map(d=>dayNum(d)).join(', ')}</td>
       <td class="num">${r.pac}</td><td class="num">${r.ses}</td><td class="num"><b>${money(r.total)}</b></td><td class="num">${money(r.cob)}</td>
       <td class="num">${r.pend?`<span style="color:var(--warn)">${money(r.pend)}</span>`:'—'}</td><td class="num">${r.noRe||'—'}</td></tr>`).join('')}</tbody>
     <tfoot><tr><td>Total del mes</td><td></td><td class="num">${pacT}</td><td class="num">${T.ses}</td><td class="num">${money(T.total)}</td><td class="num">${money(T.cob)}</td><td class="num">${T.pend?money(T.pend):'—'}</td><td class="num">${T.noRe||'—'}</td></tr></tfoot>
@@ -1265,7 +1366,7 @@ function viewPacientes(){
     <div class="panel"><div class="panel-head"><div class="toolbar">
       <input class="input" type="search" placeholder="Buscar por nombre o HC" value="${esc(S.q)}" data-c="pac-q" aria-label="Buscar paciente">
       <select class="select" data-c="pac-f" aria-label="Filtrar por estado">${options('estadosPaciente',S.filtroEstado,'Todos los estados')}</select></div></div>
-    <div class="scroll"><table><thead><tr><th>HC</th><th>Nombre</th><th>Horario</th><th>Institución</th><th class="num">Honorario</th><th>Estado</th><th class="num">Debe</th></tr></thead>
+    <div class="scroll"><table data-sort="pacientes"><thead><tr><th>HC</th><th>Nombre</th><th>Horario</th><th>Institución</th><th class="num">Honorario</th><th>Estado</th><th class="num">Debe</th></tr></thead>
     <tbody>${rows||`<tr><td colspan="7" class="muted">${S.patients.length?'Ningún paciente coincide con la búsqueda.':'Todavía no hay pacientes. Creá el primero con "Nuevo paciente".'}</td></tr>`}</tbody></table></div></div>`;
 }
 
@@ -1274,7 +1375,7 @@ function viewGastos(){
   const m=S.month;const gs=gastosMes(m).sort((a,b)=>(a.fecha||'').localeCompare(b.fecha||''));
   const total=gs.reduce((a,g)=>a+Number(g.monto||0),0);
   const prev=gastosMes(addMonths(m,-1));
-  const rows=gs.map(g=>`<tr><td>${esc(fmtShort(g.fecha))}</td><td>${esc(item('categoriasGasto',g.categoria)?.nombre||'Sin categoría')}</td><td>${esc(g.descripcion||'')}</td>
+  const rows=gs.map(g=>`<tr><td data-v="${esc(g.fecha)}">${esc(fmtShort(g.fecha))}</td><td>${esc(item('categoriasGasto',g.categoria)?.nombre||'Sin categoría')}</td><td>${esc(g.descripcion||'')}</td>
     <td>${esc(item('mediosPago',g.medio)?.nombre||'')}</td><td class="num">${money(g.monto)}</td>
     <td class="num"><button class="btn danger icon" data-a="gasto-del" data-id="${esc(g.id)}" aria-label="Eliminar gasto">✕</button></td></tr>`).join('');
   const [y,mm]=m.split('-');
@@ -1287,7 +1388,7 @@ function viewGastos(){
       <select class="select" id="g_medio" aria-label="Medio de pago">${options('mediosPago','','Medio de pago')}</select>
       <input class="input" id="g_monto" type="number" min="0" step="100" placeholder="Monto" aria-label="Monto" style="width:130px">
       <button class="btn primary" data-a="gasto-add">Agregar gasto</button></div></div></div>
-    <div class="panel"><div class="scroll"><table><thead><tr><th>Fecha</th><th>Categoría</th><th>Descripción</th><th>Medio</th><th class="num">Monto</th><th></th></tr></thead>
+    <div class="panel"><div class="scroll"><table data-sort="gastos"><thead><tr><th>Fecha</th><th>Categoría</th><th>Descripción</th><th>Medio</th><th class="num">Monto</th><th></th></tr></thead>
     <tbody>${rows||'<tr><td colspan="6" class="muted">No hay gastos cargados en este mes.</td></tr>'}</tbody>
     ${rows?`<tfoot><tr><td colspan="4">Total</td><td class="num">${money(total)}</td><td></td></tr></tfoot>`:''}</table></div></div>`;
 }
@@ -1336,6 +1437,7 @@ function viewConfig(){
   return `<div class="view-head"><div><h1>Configuración</h1><p class="sub">Los cambios se guardan automáticamente.</p></div></div>
     ${lookPanel(g)}
     ${pinPanel()}
+    ${feriadosPanel()}
     <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>General</h2></div><div class="panel-body"><div class="form cols3">
       <div class="field full"><label for="c_prof">Nombre del profesional o consultorio</label><input class="input" id="c_prof" data-c="gen" data-k="profesional" value="${esc(g.profesional)}" placeholder="Ej.: Lic. Nombre Apellido"></div>
       <div class="field"><label for="c_ini">La agenda empieza a las</label><select class="select" id="c_ini" data-c="gen" data-k="inicio" data-num="1">${hourOpts(g.inicio)}</select></div>
@@ -1543,6 +1645,16 @@ document.addEventListener('click',async ev=>{
     case 'pin-off': startPinFlow('verify',()=>{pinSave(null);hideLock();render();toast('PIN desactivado en este dispositivo')});break;
     case 'pin-lock': lockNow();break;
     case 'pin-sug-no':{try{localStorage.setItem(LK_PIN_SUG,'1')}catch(e){}render();break}
+    case 'sort':{const k=a.dataset.t,i=Number(a.dataset.i);const cur=S.sort[k];
+      S.sort[k]=!cur||cur.i!==i?{i,dir:1}:cur.dir===1?{i,dir:-1}:null;render();
+      document.querySelector(`[data-a="sort"][data-t="${k}"][data-i="${i}"]`)?.focus();break}
+    case 'fer-year':{S.ferYear=(S.ferYear||Number(TODAY.slice(0,4)))+Number(a.dataset.n);render();break}
+    case 'fer-off':{const g=S.config.general;g.feriadosQuitados=[...new Set([...(g.feriadosQuitados||[]),a.dataset.f])];saveConfig();render();toast('Feriado quitado');break}
+    case 'fer-back':{const g=S.config.general;g.feriadosQuitados=(g.feriadosQuitados||[]).filter(f=>f!==a.dataset.f);saveConfig();render();break}
+    case 'fer-del':{const g=S.config.general;g.feriadosExtra=(g.feriadosExtra||[]).filter(f=>f.fecha!==a.dataset.f);saveConfig();render();toast('Feriado eliminado');break}
+    case 'fer-add':{const fecha=val('ferFecha'),nombre=val('ferNombre').trim()||'Feriado',tipo=val('ferTipo');
+      if(!fecha){toast('Elegí la fecha');break}
+      const g=S.config.general;g.feriadosExtra=[...(g.feriadosExtra||[]).filter(f=>f.fecha!==fecha),{fecha,nombre,tipo}];S.ferYear=Number(fecha.slice(0,4));saveConfig();render();toast('Feriado agregado');break}
     case 'caja-view': S.cajaV=a.dataset.v;render();break;
     case 'caja-nav':{const n=Number(a.dataset.n);const c=S.cajaCur||TODAY;
       S.cajaCur=!n?TODAY:S.cajaV==='dia'?addDays(c,n):S.cajaV==='semana'?addDays(c,7*n):addMonths(monthKey(c),n)+'-01';render();break}
@@ -1687,7 +1799,7 @@ document.addEventListener('change',async ev=>{
   if(c==='ses-field'){const s=S.visible[el.dataset.id];if(!s||!el.value)return;saveSession({...s,[el.dataset.f]:el.value});render();toast('Sesión actualizada')}
   else if(c==='pac-f'){S.filtroEstado=el.value;render()}
   else if(c==='pin-min'||c==='pin-salir'){const p=pinCfg();if(p){if(c==='pin-min')p.min=Number(el.value);else p.alSalir=el.checked;pinSave(p);toast('Guardado')}}
-  else if(c==='gen'){const k=el.dataset.k;S.config.general[k]=el.type==='checkbox'?el.checked:el.dataset.num?Number(el.value):el.value.trim();saveConfig();renderNav();applyLook()}
+  else if(c==='gen'){const k=el.dataset.k;S.config.general[k]=el.type==='checkbox'?el.checked:el.dataset.num?Number(el.value):el.value.trim();saveConfig();renderNav();applyLook();if(el.dataset.k==='feriadosAuto')render()}
   else if(c==='cfg'){
     const i=item(el.dataset.list,el.dataset.id);if(!i)return;const k=el.dataset.k;
     if(k==='nombre'){const v=el.value.trim();if(!v){el.value=i.nombre;return}i.nombre=v}
