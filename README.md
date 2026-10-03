@@ -62,6 +62,8 @@ bash ~/crm-psiconflor/servidor/desplegar.sh homo
 
 La primera vez pide los emails autorizados a facturar y los guarda solo en Cloud Shell.
 
+Servidor de homologación instalado en: `https://arca-qe54wqshhq-rj.a.run.app`. En la app: Configuración > Facturación electrónica > "Probar conexión con ARCA".
+
 ## Estructura
 
 ```

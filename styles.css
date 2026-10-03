@@ -532,3 +532,8 @@ tr.fer-off td:last-child{opacity:1;text-decoration:none}
 .libera-box .input{max-width:220px}
 .closed-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:.86rem}
 .libera-box[hidden]{display:none}
+
+.fac-ok{border:1px solid var(--line);border-left:4px solid #2E7D4F;border-radius:10px;padding:12px 14px}
+.fac-dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;margin:0}
+.fac-dl dt{color:var(--muted);font-size:.86rem}
+.fac-dl dd{margin:0;font-weight:600}

@@ -697,6 +697,45 @@ function ferTag(fecha,corto){
   const f=feriadoDe(fecha);if(!f)return '';
   return `<span class="fer ${f.tipo}" title="${esc(f.nombre)}">${corto?(f.tipo==='feriado'?'Feriado':'No laborable'):esc(f.nombre)}</span>`;
 }
+/* ============ Facturación electrónica (ARCA) ============ */
+const SERVIDOR_DEF='https://arca-qe54wqshhq-rj.a.run.app';
+const facCfg=()=>({url:SERVIDOR_DEF,ptoVta:1,...(S.config?.general?.facturacion||{})});
+async function llamarServidor(datos){
+  if(!Store.fb) throw new Error('La facturación funciona solo en la versión real de la app (la de GitHub), con la sesión de Google iniciada.');
+  const u=FB.auth.currentUser;if(!u) throw new Error('Iniciá sesión con Google para continuar.');
+  const token=await u.getIdToken();
+  let r;
+  try{r=await fetch(facCfg().url,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(datos),signal:AbortSignal.timeout(60000)})}
+  catch(e){throw new Error('No se pudo conectar con el servidor. Revisá la conexión a internet.')}
+  let j={};try{j=await r.json()}catch(e){}
+  if(!r.ok||j.ok===false) throw new Error(j.error||(j.errores||[]).join(' | ')||`El servidor respondió con un error (${r.status}).`);
+  return j;
+}
+function facturacionPanel(){
+  const f=facCfg();const res=S.facPrueba;
+  const fmtF=s=>{if(!s)return '—';const d=new Date(s);return isNaN(d)?esc(s):`${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`};
+  let out='';
+  if(res?.cargando) out='<p class="muted">Conectando con ARCA… puede tardar unos segundos.</p>';
+  else if(res?.error) out=`<div class="notice warn">${ICONS.info}<p>${esc(res.error)}</p></div>`;
+  else if(res?.ok){const a=res.arca||{};const okA=a.AppServer==='OK'&&a.DbServer==='OK'&&a.AuthServer==='OK';
+    out=`<div class="fac-ok"><p class="ok-txt" style="margin:0 0 8px">✓ Conexión con ARCA funcionando</p><dl class="fac-dl">
+      <dt>Entorno</dt><dd>${res.entorno==='prod'?'<b>Producción</b> (facturas reales)':'Homologación (facturas de prueba, sin validez fiscal)'}</dd>
+      <dt>CUIT</dt><dd>${esc(res.cuit)}</dd>
+      <dt>Servidores de ARCA</dt><dd>${okA?'Funcionando':esc(JSON.stringify(a))}</dd>
+      <dt>Certificado vence</dt><dd>${fmtF(res.certificadoVence)}</dd>
+      <dt>Punto de venta</dt><dd>${esc(res.ptoVta)}</dd>
+      <dt>Última Factura C emitida</dt><dd>${res.ultimoNumero?`N.º ${esc(res.ultimoNumero)}`:'Ninguna todavía'}</dd></dl></div>`;}
+  return `<section class="panel" style="margin-top:16px"><div class="panel-head"><div><h2>Facturación electrónica (ARCA)</h2>
+    <p class="small muted" style="margin-top:3px">Emisión de Factura C a través del servidor del consultorio. El certificado de ARCA está guardado en Google Secret Manager y la app nunca lo ve.</p></div></div>
+    <div class="panel-body"><div class="form cols3">
+      <div class="field full"><label for="facUrl">Dirección del servidor</label><input class="input" id="facUrl" data-c="fac" data-k="url" value="${esc(f.url)}"></div>
+      <div class="field"><label for="facPto">Punto de venta</label><input class="input" type="number" min="1" id="facPto" data-c="fac" data-k="ptoVta" value="${esc(f.ptoVta)}"><p class="hint">En homologación sirve cualquier número.</p></div>
+    </div>
+    <div class="btn-group" style="margin-top:12px"><button class="btn primary" data-a="fac-test" ${res?.cargando?'disabled':''}>Probar conexión con ARCA</button></div>
+    <div style="margin-top:14px" aria-live="polite">${out}</div>
+    ${Store.fb?'':'<p class="hint" style="margin-top:10px">En esta versión de prueba no se puede conectar con ARCA: probalo en la versión real de GitHub.</p>'}
+    </div></section>`;
+}
 function feriadosPanel(){
   const g=S.config.general;const y=S.ferYear||Number(TODAY.slice(0,4));
   const lista=[];
@@ -1439,6 +1478,7 @@ function viewConfig(){
     ${lookPanel(g)}
     ${pinPanel()}
     ${feriadosPanel()}
+    ${facturacionPanel()}
     <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>General</h2></div><div class="panel-body"><div class="form cols3">
       <div class="field full"><label for="c_prof">Nombre del profesional o consultorio</label><input class="input" id="c_prof" data-c="gen" data-k="profesional" value="${esc(g.profesional)}" placeholder="Ej.: Lic. Nombre Apellido"></div>
       <div class="field"><label for="c_ini">La agenda empieza a las</label><select class="select" id="c_ini" data-c="gen" data-k="inicio" data-num="1">${hourOpts(g.inicio)}</select></div>
@@ -1696,6 +1736,9 @@ document.addEventListener('click',async ev=>{
     case 'fer-add':{const fecha=val('ferFecha'),nombre=val('ferNombre').trim()||'Feriado',tipo=val('ferTipo');
       if(!fecha){toast('Elegí la fecha');break}
       const g=S.config.general;g.feriadosExtra=[...(g.feriadosExtra||[]).filter(f=>f.fecha!==fecha),{fecha,nombre,tipo}];S.ferYear=Number(fecha.slice(0,4));saveConfig();render();toast('Feriado agregado');break}
+    case 'fac-test':{S.facPrueba={cargando:true};render();
+      try{S.facPrueba=await llamarServidor({accion:'estado',ptoVta:Number(facCfg().ptoVta)||1})}catch(e){S.facPrueba={error:e.message}}
+      if(S.view==='config')render();break}
     case 'caja-view': S.cajaV=a.dataset.v;render();break;
     case 'caja-nav':{const n=Number(a.dataset.n);const c=S.cajaCur||TODAY;
       S.cajaCur=!n?TODAY:S.cajaV==='dia'?addDays(c,n):S.cajaV==='semana'?addDays(c,7*n):addMonths(monthKey(c),n)+'-01';render();break}
@@ -1863,6 +1906,7 @@ document.addEventListener('change',async ev=>{
   if(c==='ses-field'){const s=S.visible[el.dataset.id];if(!s||!el.value)return;saveSession({...s,[el.dataset.f]:el.value});render();toast('Sesión actualizada')}
   else if(c==='pac-f'){S.filtroEstado=el.value;render()}
   else if(c==='pin-min'||c==='pin-salir'){const p=pinCfg();if(p){if(c==='pin-min')p.min=Number(el.value);else p.alSalir=el.checked;pinSave(p);toast('Guardado')}}
+  else if(c==='fac'){const g=S.config.general;g.facturacion={...facCfg(),[el.dataset.k]:el.dataset.k==='ptoVta'?Math.max(1,Number(el.value)||1):el.value.trim()};saveConfig();S.facPrueba=null}
   else if(c==='gen'){const k=el.dataset.k;S.config.general[k]=el.type==='checkbox'?el.checked:el.dataset.num?Number(el.value):el.value.trim();saveConfig();renderNav();applyLook();if(el.dataset.k==='feriadosAuto')render()}
   else if(c==='cfg'){
     const i=item(el.dataset.list,el.dataset.id);if(!i)return;const k=el.dataset.k;
