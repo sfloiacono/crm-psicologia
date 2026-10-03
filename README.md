@@ -12,6 +12,7 @@ Aplicación web para organizar un consultorio de psicología: agenda, registro d
 - **Caja**: cobrado, pendiente, porcentaje para instituciones, gastos y neto, por día, por semana o por mes.
 - **Pacientes**: ficha completa, historial de horarios y comprobantes de pago (imagen o PDF).
 - **Gastos**: egresos del consultorio por categoría.
+- **Altas que liberan la agenda**: al pasar un paciente a "Alta por abandono", "Alta por finalización" o "Derivación", la app cierra sus horarios desde la fecha indicada y quita las sesiones futuras, con confirmación, "Deshacer" y opción de reabrir el horario.
 - **Feriados de Argentina**: calendario oficial cargado (2026), con feriados propios agregables. Las sesiones en feriados nacionales se marcan solas como "Feriado" (configurable).
 - **Tablas ordenables**: tocando el título de una columna se ordena de menor a mayor o de mayor a menor.
 - **Aviso de pagos atrasados**: una ventana emergente avisa cuando un pago lleva más de 7 días pendiente (el plazo se cambia en Configuración), con acceso a marcarlo como pagado o a recordarle al paciente por WhatsApp.
@@ -48,11 +49,25 @@ Hay que cambiarla en **dos lugares**, y las dos listas tienen que coincidir:
 - **Papelera:** los pacientes eliminados van a Configuración > Papelera, con sus sesiones y comprobantes, y se pueden restaurar.
 - **Confirmaciones:** borrar todos los datos o eliminar un paciente definitivamente requiere escribir una palabra para confirmar. Los gastos eliminados se pueden recuperar con "Deshacer".
 
+## Servidor (facturación electrónica con ARCA)
+
+La carpeta `servidor/` contiene una función de Google Cloud que emite Factura C en ARCA. El certificado y la clave privada **no** están en el repositorio: se guardan en Secret Manager (`arca-homo-cert`, `arca-homo-key`; para producción, `arca-prod-cert`, `arca-prod-key`).
+
+Para instalarlo o actualizarlo, en **Cloud Shell** (console.cloud.google.com, ícono de terminal arriba a la derecha):
+
+```
+[ -d ~/crm-psiconflor ] && git -C ~/crm-psiconflor pull || git clone https://github.com/sfloiacono/crm-psiconflor.git ~/crm-psiconflor
+bash ~/crm-psiconflor/servidor/desplegar.sh homo
+```
+
+La primera vez pide los emails autorizados a facturar y los guarda solo en Cloud Shell.
+
 ## Estructura
 
 ```
 index.html             Estructura de la página
 firebase.js            Conexión con Firebase y lista de cuentas autorizadas
+servidor/              Servidor de facturación (ARCA)
 styles.css             Estilos, paletas y tipografías
 app.js                 Lógica de la aplicación
 manifest.webmanifest   Datos para instalarla en el celular

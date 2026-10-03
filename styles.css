@@ -527,3 +527,8 @@ th.num .thsort{justify-content:flex-end}
 tr.fer-off td{opacity:.5;text-decoration:line-through}
 tr.fer-off td:last-child{opacity:1;text-decoration:none}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .fer.feriado{color:#A9C6EE}}
+
+.libera-box{background:var(--warn-soft);border-radius:10px;padding:10px 12px}
+.libera-box .input{max-width:220px}
+.closed-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:.86rem}
+.libera-box[hidden]{display:none}

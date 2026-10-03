@@ -33,7 +33,7 @@ const LISTS=[
   {key:'facturacion',titulo:'Facturación',desc:'Tipo de comprobante o reintegro.'},
   {key:'instituciones',titulo:'Instituciones y derivaciones',desc:'Quién deriva al paciente y qué porcentaje le corresponde.',extra:[{k:'porcentaje',label:'% institución',type:'number'}]},
   {key:'modalidades',titulo:'Modalidades de atención',desc:'Virtual, presencial y sus variantes.'},
-  {key:'estadosPaciente',titulo:'Estados del paciente',desc:'Solo los estados con "En agenda" generan sesiones automáticamente.',color:true,extra:[{k:'agenda',label:'En agenda',type:'bool'}]},
+  {key:'estadosPaciente',titulo:'Estados del paciente',desc:'"En agenda": genera sesiones automáticamente. "Libera la agenda": al pasar a ese estado, cierra los horarios y quita las sesiones futuras (pide confirmación).',color:true,extra:[{k:'agenda',label:'En agenda',type:'bool'},{k:'libera',label:'Libera la agenda',type:'bool'}]},
   {key:'frecuencias',titulo:'Frecuencias',desc:'Cada cuántas semanas se repite la sesión.',extra:[{k:'semanas',label:'Cada',suffix:'sem.',type:'number'}]},
   {key:'categoriasGasto',titulo:'Categorías de gasto',desc:'Para clasificar los egresos del consultorio.'},
   {key:'legajos',titulo:'Tipos de legajo',desc:'Dónde guardás la historia clínica.'}
@@ -66,9 +66,9 @@ function defaultConfig(){
     estadosPaciente:[
       it('activo','Activo',{color:'#2E7D4F',agenda:true}),
       it('pausa','En pausa',{color:'#B39A2E',agenda:false}),
-      it('alta_fin','Alta por finalización',{color:'#3F74B5',agenda:false}),
-      it('alta_abandono','Alta por abandono',{color:'#8A9A9C',agenda:false}),
-      it('derivacion','Derivación',{color:'#8B5CA8',agenda:false})
+      it('alta_fin','Alta por finalización',{color:'#3F74B5',agenda:false,libera:true}),
+      it('alta_abandono','Alta por abandono',{color:'#8A9A9C',agenda:false,libera:true}),
+      it('derivacion','Derivación',{color:'#8B5CA8',agenda:false,libera:true})
     ],
     frecuencias:[it('semanal','Semanal',{semanas:1}),it('quincenal','Quincenal',{semanas:2}),it('mensual','Mensual',{semanas:4})],
     categoriasGasto:[it('supervision','Supervisión'),it('especializacion','Especialización'),it('mala_praxis','Seguro de mala praxis'),it('monotributo','Monotributo'),it('analisis','Análisis personal'),it('alquiler','Alquiler de consultorio')],
@@ -80,6 +80,7 @@ function mergeConfig(c){
   c.general={...d.general,...(c.general||{})};
   c.lists=c.lists||{};
   for(const L of LISTS) if(!Array.isArray(c.lists[L.key])) c.lists[L.key]=d.lists[L.key];
+  for(const e of c.lists.estadosPaciente){ if(e.libera==null) e.libera=['alta_fin','alta_abandono','derivacion'].includes(e.id); }
   for(const e of c.lists.estadosSesion){ if(typeof e.cobra==='boolean'||e.cobra==null){ e.cobra=e.cobra===true?'si':(e.id==='cancelo_paciente'?'opcional':'no'); } }
   const pend=c.lists.estadosPago.find(i=>i.id==='pendiente');if(pend&&pend.nombre==='Pendiente')pend.nombre='Pendiente de pago';
   return c;
@@ -1545,6 +1546,11 @@ function renderPacDialog(){
       ${F('fechaDerivacion','Fecha de derivación o inicio',e.fechaDerivacion,'date')}
       <div class="fieldset-title">Tratamiento</div>
       ${Sel('estado','Estado','estadosPaciente',e.estado)}
+      <div class="field full libera-box" id="liberaBox" ${liberaVisible(e)?'':'hidden'}>
+        <label for="pf_fechaFin" id="liberaLbl">${liberaLabel(e.estado)}</label>
+        <input class="input" type="date" id="pf_fechaFin" name="fechaFin" value="${esc(e.fechaFin||TODAY)}" max="${addDays(TODAY,365)}">
+        <p class="hint">Al guardar, la app te muestra qué horarios se liberan y qué sesiones se quitan de la agenda, y te pide confirmar.</p>
+      </div>
       ${Sel('modalidad','Modalidad','modalidades',e.modalidad)}
       ${Sel('institucion','Institución o derivación','instituciones',e.institucion)}
       ${Sel('legajo','Legajo','legajos',e.legajo,'Sin especificar')}
@@ -1564,7 +1570,7 @@ function renderPacDialog(){
         <button class="btn danger icon" data-a="hor-del" data-i="${i}" aria-label="Quitar horario">✕</button></div>`).join('')||'<p class="hint">Sin horario fijo. Podés agregar sesiones sueltas desde la agenda.</p>'}
         <button class="btn" data-a="hor-add">Agregar horario</button>
         <p class="hint" style="margin-top:8px">Si cambiás o quitás un horario, el cambio rige desde hoy: las sesiones anteriores quedan como estaban. En quincenal, "Desde" marca la semana de la primera sesión.</p>
-        ${closed.length?`<p class="hint" style="margin-top:6px">Horarios anteriores: ${closed.map(x=>`${DIAS_C[x.dia-1]} ${x.hora} ${(item('frecuencias',x.frecuencia)?.nombre||'').toLowerCase()}, hasta el ${fmtShort(x.hasta)}`).join('; ')}.</p>`:''}</div>
+        ${closed.length?`<div class="closed-h"><p class="hint" style="margin:10px 0 6px">Horarios anteriores:</p>${closed.map(x=>`<div class="closed-row"><span>${DIAS_C[x.dia-1]} ${esc(x.hora)}, ${(item('frecuencias',x.frecuencia)?.nombre||'').toLowerCase()}, hasta el ${fmtShort(x.hasta)}</span>${(e.horarios||[]).some(h=>h.reabiertoDe===x.id)?'<span class="muted small">Reabierto</span>':`<button class="btn sm" data-a="hor-reopen" data-hid="${esc(x.id)}">Reabrir horario</button>`}</div>`).join('')}</div>`:''}</div>
       ${e.isNew?'':compSection(e.id)}
       <div class="fieldset-title">Observaciones</div>
       <div class="field full"><textarea class="input" name="observaciones" aria-label="Observaciones">${esc(e.observaciones||'')}</textarea></div>
@@ -1572,10 +1578,45 @@ function renderPacDialog(){
   <div class="dlg-foot"><div>${e.isNew?'':'<button class="btn danger" data-a="pac-del">Eliminar paciente</button>'}</div>
     <div class="btn-group"><button class="btn" data-a="dlg-close">Cancelar</button><button class="btn primary" data-a="pac-save">${e.isNew?'Crear paciente':'Guardar cambios'}</button></div></div>`);
 }
+const liberaEst=id=>!!item('estadosPaciente',id)?.libera;
+function liberaVisible(e){const o=e.isNew?null:pat(e.id);return !e.isNew&&liberaEst(e.estado)&&!(o&&liberaEst(o.estado))}
+function liberaLabel(est){return est==='alta_abandono'?'¿Desde qué fecha dejó de venir?':'¿Desde qué fecha termina el tratamiento?'}
+/* Plan para liberar la agenda de un paciente desde una fecha */
+function planLibera(p,desde){
+  const now=nowHM();
+  const fut=s=>s.fecha>TODAY||(s.fecha===TODAY&&(s.hora||'')>now);
+  const abiertos=(p.horarios||[]).filter(h=>h.hora&&(!h.hasta||h.hasta>=desde));
+  const hasta=TODAY>addDays(desde,90)?TODAY:addDays(desde,90);
+  const ses=sessionsInRange(desde<TODAY?desde:TODAY,addDays(hasta,120)).filter(s=>s.pid===p.id&&s.fecha>=desde);
+  const pagada=s=>item('estadosPago',s.pago)?.tipo==='cobrado';
+  const intermedias=ses.filter(s=>!fut(s)&&s.estado==='programada'&&!pagada(s));
+  const futGuardadas=ses.filter(s=>fut(s)&&!s.virtual&&!pagada(s));
+  const futHoy=ses.filter(s=>fut(s)&&s.virtual&&s.fecha===TODAY);
+  const conservadas=ses.filter(s=>pagada(s)&&s.fecha>=desde&&(fut(s)||s.estado==='programada'));
+  return {desde,abiertos,intermedias,futGuardadas,futHoy,conservadas};
+}
+async function aplicarLibera(p,orig,plan){
+  const prevPat=JSON.parse(JSON.stringify(orig));const backups=new Map();
+  const toca=s=>{if(!backups.has(s.id)){const prev=findSession(s.id);backups.set(s.id,{prev:prev?JSON.parse(JSON.stringify(prev)):null,fecha:s.fecha})}};
+  const abandono=p.estado==='alta_abandono';
+  for(const s of plan.intermedias){toca(s);
+    if(abandono&&item('estadosSesion','cancelo_paciente')) saveSession({...s,estado:'cancelo_paciente',cobrar:false,nota:((s.nota||'')+' Alta por abandono.').trim()});
+    else saveSession({...s,oculta:true});}
+  for(const s of plan.futGuardadas){toca(s);if(s.extra)deleteSession(s);else saveSession({...s,oculta:true})}
+  for(const s of plan.futHoy){toca(s);saveSession({...s,oculta:true})}
+  const corte=addDays(plan.desde,-1);
+  p.horarios=(p.horarios||[]).map(h=>h.hora&&(!h.hasta||h.hasta>=plan.desde)?{...h,hasta:corte}:h);
+  p.fechaFin=plan.desde;
+  return ()=>{
+    for(const [id,b] of backups){if(b.prev)saveSession(b.prev);else deleteSession({id,fecha:b.fecha})}
+    const i=S.patients.findIndex(x=>x.id===prevPat.id);if(i>=0)S.patients[i]=prevPat;savePatients();render();toast('Cambios deshechos');
+  };
+}
 function readPacForm(){
   const f=document.getElementById('pac-form');if(!f) return;const e=S.edit;
   f.querySelectorAll('[name]').forEach(el=>{
     if(el.name.startsWith('h_')) return;
+    if(el.name==='fechaFin'&&document.getElementById('liberaBox')?.hidden) return;
     e[el.name]=el.type==='checkbox'?el.checked:(el.type==='number'?(el.value===''?'':Number(el.value)):el.value.trim());
   });
   e.horarios=[...f.querySelectorAll('.hor-row')].map(r=>{
@@ -1733,8 +1774,30 @@ document.addEventListener('click',async ev=>{
       const p={...e};delete p.isNew;
       const edited=(p.horarios||[]).filter(h=>h.hora);
       const orig=pat(p.id);const {horarios,split}=mergeHorarios(orig?.horarios||[],edited);p.horarios=horarios;
+      let deshacer=null;
+      const transicion=orig&&liberaEst(p.estado)&&!liberaEst(orig.estado);if(!transicion&&orig)p.fechaFin=orig.fechaFin;
+      if(orig&&liberaEst(p.estado)&&!liberaEst(orig.estado)){
+        const desde=p.fechaFin||TODAY;const pl=planLibera({...p,horarios:orig.horarios},desde);
+        const hs=pl.abiertos.map(x=>`${DIAS_C[x.dia-1]} ${x.hora} ${(item('frecuencias',x.frecuencia)?.nombre||'').toLowerCase()}`);
+        const lineas=[
+          `${item('estadosPaciente',p.estado)?.nombre} de ${fullName(p)}, desde el ${fmtShort(desde)}.`,
+          hs.length?`Se liberan sus horarios: ${hs.join('; ')}.`:'No tiene horarios habituales abiertos.',
+          pl.intermedias.length?`${pl.intermedias.length} ${pl.intermedias.length===1?'sesión sin registrar':'sesiones sin registrar'} desde esa fecha ${p.estado==='alta_abandono'?'se marcan como "Canceló paciente" (no se cobra)':'se quitan de la agenda'}.`:'',
+          (()=>{const n=pl.futGuardadas.length+pl.futHoy.length;return n?(n===1?'Se quita 1 sesión futura ya cargada.':`Se quitan ${n} sesiones futuras ya cargadas.`):''})(),
+          pl.conservadas.length?`${pl.conservadas.length} ${pl.conservadas.length===1?'sesión pagada por adelantado queda':'sesiones pagadas por adelantado quedan'} en la agenda para que decidas qué hacer con el pago.`:'',
+          'El pasado registrado (sesiones atendidas, pagos y deudas) no se modifica.'].filter(Boolean).join(' ');
+        const ok=await confirmBox('Liberar la agenda',lineas,'Confirmar',false);
+        if(!ok)break;
+        p.horarios=orig.horarios;deshacer=await aplicarLibera(p,orig,pl);
+      }
       const i=S.patients.findIndex(x=>x.id===p.id);if(i>=0)S.patients[i]=p;else S.patients.push(p);
-      savePatients();closeDlg();toast(e.isNew?'Paciente creado':split?'Ficha actualizada. El nuevo horario rige desde hoy.':'Ficha actualizada');break}
+      savePatients();closeDlg();
+      if(deshacer){render();toastUndo(`Agenda de ${fullName(p)} liberada.`,deshacer)}
+      else toast(e.isNew?'Paciente creado':split?'Ficha actualizada. El nuevo horario rige desde hoy.':'Ficha actualizada');break}
+    case 'hor-reopen':{readPacForm();const o=pat(S.edit.id);const x=(o?.horarios||[]).find(h=>h.id===a.dataset.hid);if(!x)break;
+      const n={...x,id:'h_'+uid(),desde:TODAY,ancla:x.ancla||x.desde,reabiertoDe:x.id};delete n.hasta;S.edit.horarios.push(n);
+      if(!item('estadosPaciente',S.edit.estado)?.agenda){const act=list('estadosPaciente').find(s=>s.agenda);if(act)S.edit.estado=act.id}
+      renderPacDialog();toast('Horario reabierto desde hoy. Revisalo y tocá "Guardar cambios".');break}
     case 'pac-del':{
       const e=S.edit;
       const ok=await confirmBox('Mover a la papelera',`La ficha de ${fullName(e)} se mueve a la papelera, con sus sesiones y comprobantes, y deja de aparecer en la agenda y en la caja. La podés restaurar desde Configuración > Papelera. Si terminó el tratamiento, conviene cambiar su estado a un alta en lugar de eliminarla.`,'Mover a la papelera');
@@ -1792,6 +1855,7 @@ document.addEventListener('click',async ev=>{
 });
 
 document.addEventListener('change',async ev=>{
+  if(ev.target.id==='pf_estado'&&S.edit){const box=document.getElementById('liberaBox');if(box){const o=pat(S.edit.id);const v=ev.target.value;box.hidden=!(!S.edit.isNew&&liberaEst(v)&&!(o&&liberaEst(o.estado)));document.getElementById('liberaLbl').textContent=liberaLabel(v)}}
   const el=ev.target.closest('[data-c]');if(!el) return;
   const c=el.dataset.c;
   if(c==='reg-estado'){const s=S.visible[el.dataset.id]||findSession(el.dataset.id);if(s&&el.value)regEstado(s,el.value);return}

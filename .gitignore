@@ -9,3 +9,6 @@ backups/
 # Archivos del sistema
 .DS_Store
 Thumbs.db
+
+# Dependencias del servidor
+node_modules/
